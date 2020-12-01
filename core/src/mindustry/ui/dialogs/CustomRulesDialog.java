@@ -1,351 +1,671 @@
-package mindustry.ui.dialogs;
+package org.apache.zookeeper.server;
 
-import arc.*;
-import arc.func.*;
-import arc.graphics.*;
-import arc.math.*;
-import arc.scene.style.*;
-import arc.scene.ui.*;
-import arc.scene.ui.ImageButton.*;
-import arc.scene.ui.layout.*;
-import arc.struct.*;
-import arc.util.*;
-import mindustry.content.*;
-import mindustry.ctype.*;
-import mindustry.game.*;
-import mindustry.gen.*;
-import mindustry.graphics.*;
-import mindustry.type.*;
-import mindustry.type.Weather.*;
-import mindustry.ui.*;
-import mindustry.world.*;
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+import org.apache.commons.lang.StringUtils;AC
+import org.apache.jute.Record;
+import org.apache.zookeeper.ClientCnxn;
+import org.apache.zookeeper.KeeperException;
+import org.apache.zookeeper.KeeperException.Code;
+import org.apache.zookeeper.KeeperException.SessionMovedException;
+import org.apache.zookeeper.MultiOperationRecord;
+import org.apache.zookeeper.MultiResponse;
+import org.apache.zookeeper.Op;
+import org.apache.zookeeper.OpResult;
+import org.apache.zookeeper.OpResult.CheckResult;AC
+import org.apache.zookeeper.OpResult.CreateResult;
+import org.apache.zookeeper.OpResult.DeleteResult;
+import org.apache.zookeeper.OpResult.ErrorResult;
+import org.apache.zookeeper.OpResult.GetChildrenResult;
+import org.apache.zookeeper.OpResult.GetDataResult;
+import org.apache.zookeeper.OpResult.SetDataResult;
+import org.apache.zookeeper.Watcher.WatcherType;
+import org.apache.zookeeper.ZooDefs;
+import org.apache.zookeeper.ZooDefs.OpCode;
+import org.apache.zookeeper.audit.AuditHelper;
+import org.apache.zookeeper.common.Time;
+import org.apache.zookeeper.data.ACL;
+import org.apache.zookeeper.data.Id;
+import org.apache.zookeeper.data.Stat;
+import org.apache.zookeeper.proto.AddWatchRequest;
+import org.apache.zookeeper.proto.CheckWatchesRequest;
+import org.apache.zookeeper.proto.Create2Response;
+import org.apache.zookeeper.proto.CreateResponse;
+import org.apache.zookeeper.proto.ErrorResponse;
+import org.apache.zookeeper.proto.ExistsRequest;
+import org.apache.zookeeper.proto.ExistsResponse;
+import org.apache.zookeeper.proto.GetACLRequest;
+import org.apache.zookeeper.proto.GetACLResponse;
+import org.apache.zookeeper.proto.GetAllChildrenNumberRequest;
+import org.apache.zookeeper.proto.GetAllChildrenNumberResponse;
+import org.apache.zookeeper.proto.GetChildren2Request;
+import org.apache.zookeeper.proto.GetChildren2Response;
+import org.apache.zookeeper.proto.GetChildrenRequest;
+import org.apache.zookeeper.proto.GetChildrenResponse;
+import org.apache.zookeeper.proto.GetDataRequest;
+import org.apache.zookeeper.proto.GetDataResponse;
+import org.apache.zookeeper.proto.GetEphemeralsRequest;
+import org.apache.zookeeper.proto.GetEphemeralsResponse;
+import org.apache.zookeeper.proto.RemoveWatchesRequest;
+import org.apache.zookeeper.proto.ReplyHeader;
+import org.apache.zookeeper.proto.SetACLResponse;
+import org.apache.zookeeper.proto.SetDataResponse;
+import org.apache.zookeeper.proto.SetWatches;
+import org.apache.zookeeper.proto.SetWatches2;
+import org.apache.zookeeper.proto.SyncRequest;
+import org.apache.zookeeper.proto.SyncResponse;
+import org.apache.zookeeper.server.DataTree.ProcessTxnResult;
+import org.apache.zookeeper.server.quorum.QuorumZooKeeperServer;
+import org.apache.zookeeper.server.util.RequestPathMetricsCollector;
+import org.apache.zookeeper.txn.ErrorTxn;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import static arc.util.Time.*;
-import static mindustry.Vars.*;
+/**
+ * This Request processor actually applies any transaction associated with a
+ * request and services any queries. It is always at the end of a
+ * RequestProcessor chain (hence the name), so it does not have a nextProcessor
+ * member.
+ *
+ * This RequestProcessor counts on ZooKeeperServer to populate the
+ * outstandingRequests member of ZooKeeperServer.
+ */
+public class FinalRequestProcessor implements RequestProcessor {
 
-public class CustomRulesDialog extends BaseDialog{
-    Rules rules;
-    private Table main;
-    private Prov<Rules> resetter;
-    private LoadoutDialog loadoutDialog;
-    private BaseDialog banDialog;
+    private static final Logger LOG = LoggerFactory.getLogger(FinalRequestProcessor.class);
 
-    public CustomRulesDialog(){
-        super("@mode.custom");
+    private final RequestPathMetricsCollector requestPathMetricsCollector;
 
-        loadoutDialog = new LoadoutDialog();
-        banDialog = new BaseDialog("@bannedblocks");
-        banDialog.addCloseButton();
+    ZooKeeperServer zks;
 
-        banDialog.shown(this::rebuildBanned);
-        banDialog.buttons.button("@addall", Icon.add, () -> {
-            rules.bannedBlocks.addAll(content.blocks().select(Block::canBeBuilt));
-            rebuildBanned();
-        }).size(180, 64f);
-
-        banDialog.buttons.button("@clear", Icon.trash, () -> {
-            rules.bannedBlocks.clear();
-            rebuildBanned();
-        }).size(180, 64f);
-
-        setFillParent(true);
-        shown(this::setup);
-        addCloseButton();
+    public FinalRequestProcessor(ZooKeeperServer zks) {
+        this.zks = zks;
+        this.requestPathMetricsCollector = zks.getRequestPathMetricsCollector();
     }
 
-    private void rebuildBanned(){
-        float previousScroll = banDialog.cont.getChildren().isEmpty() ? 0f : ((ScrollPane)banDialog.cont.getChildren().first()).getScrollY();
-        banDialog.cont.clear();
-        banDialog.cont.pane(t -> {
-            t.margin(10f);
+    private ProcessTxnResult applyRequest(Request request) {
+        ProcessTxnResult rc = zks.processTxn(request);
 
-            if(rules.bannedBlocks.isEmpty()){
-                t.add("@empty");
+        // ZOOKEEPER-558:
+        // In some cases the server does not close the connection (e.g., closeconn buffer
+        // was not being queued — ZOOKEEPER-558) properly. This happens, for example,
+        // when the client closes the connection. The server should still close the session, though.
+        // Calling closeSession() after losing the cnxn, results in the client close session response being dropped.
+        if (request.type == OpCode.closeSession && connClosedByClient(request)) {
+            // We need to check if we can close the session id.
+            // Sometimes the corresponding ServerCnxnFactory could be null because
+            // we are just playing diffs from the leader.
+            if (closeSession(zks.serverCnxnFactory, request.sessionId)
+                || closeSession(zks.secureServerCnxnFactory, request.sessionId)) {
+                return rc;
             }
+        }
 
-            Seq<Block> array = Seq.with(rules.bannedBlocks);
-            array.sort();
+        if (request.getHdr() != null) {
+            /*
+             * Request header is created only by the leader, so this must be
+             * a quorum request. Since we're comparing timestamps across hosts,
+             * this metric may be incorrect. However, it's still a very useful
+             * metric to track in the happy case. If there is clock drift,
+             * the latency can go negative. Note: headers use wall time, not
+             * CLOCK_MONOTONIC.
+             */
+            long propagationLatency = Time.currentWallTime() - request.getHdr().getTime();
+            if (propagationLatency >= 0) {
+                ServerMetrics.getMetrics().PROPAGATION_LATENCY.add(propagationLatency);
+            }
+        }
 
-            int cols = mobile && Core.graphics.isPortrait() ? 1 : mobile ? 2 : 3;
-            int i = 0;
+        return rc;
+    }
 
-            for(Block block : array){
-                t.table(Tex.underline, b -> {
-                    b.left().margin(4f);
-                    b.image(block.icon(Cicon.medium)).size(Cicon.medium.size).padRight(3);
-                    b.add(block.localizedName).color(Color.lightGray).padLeft(3).growX().left().wrap();
+    public void processRequest(Request request) {
+        LOG.debug("Processing request:: {}", request);
 
-                    b.button(Icon.cancel, Styles.clearPartiali, () -> {
-                       rules.bannedBlocks.remove(block);
-                       rebuildBanned();
-                    }).size(70f).pad(-4f).padLeft(0f);
-                }).size(300f, 70f).padRight(5);
+        if (LOG.isTraceEnabled()) {
+            long traceMask = ZooTrace.CLIENT_REQUEST_TRACE_MASK;
+            if (request.type == OpCode.ping) {
+                traceMask = ZooTrace.SERVER_PING_TRACE_MASK;
+            }
+            ZooTrace.logRequest(LOG, traceMask, 'E', request, "");
+        }
+        ProcessTxnResult rc = null;
+        if (!request.isThrottled()) {
+          rc = applyRequest(request);
+        }
+        if (request.cnxn == null) {
+            return;
+        }
+        ServerCnxn cnxn = request.cnxn;
 
-                if(++i % cols == 0){
-                    t.row();
+        long lastZxid = zks.getZKDatabase().getDataTreeLastProcessedZxid();
+
+        String lastOp = "NA";
+        // Notify ZooKeeperServer that the request has finished so that it can
+        // update any request accounting/throttling limits
+        zks.decInProcess();
+        zks.requestFinished(request);
+        Code err = Code.OK;
+        Record rsp = null;
+        String path = null;
+        int responseSize = 0;
+        try {
+            if (request.getHdr() != null && request.getHdr().getType() == OpCode.error) {
+                AuditHelper.addAuditLog(request, rc, true);
+                /*
+                 * When local session upgrading is disabled, leader will
+                 * reject the ephemeral node creation due to session expire.
+                 * However, if this is the follower that issue the request,
+                 * it will have the correct error code, so we should use that
+                 * and report to user
+                 */
+                if (request.getException() != null) {
+                    throw request.getException();
+                } else {
+                    throw KeeperException.create(KeeperException.Code.get(((ErrorTxn) request.getTxn()).getErr()));
                 }
             }
-        }).get().setScrollYForce(previousScroll);
-        banDialog.cont.row();
-        banDialog.cont.button("@add", Icon.add, () -> {
-            BaseDialog dialog = new BaseDialog("@add");
-            dialog.cont.pane(t -> {
-                t.left().margin(14f);
-                int[] i = {0};
-                content.blocks().each(b -> !rules.bannedBlocks.contains(b) && b.canBeBuilt(), b -> {
-                    int cols = mobile && Core.graphics.isPortrait() ? 4 : 12;
-                    t.button(new TextureRegionDrawable(b.icon(Cicon.medium)), Styles.cleari, () -> {
-                        rules.bannedBlocks.add(b);
-                        rebuildBanned();
-                        dialog.hide();
-                    }).size(60f).get().resizeImage(Cicon.medium.size);
 
-                    if(++i[0] % cols == 0){
-                        t.row();
+            KeeperException ke = request.getException();
+            if (ke instanceof SessionMovedException) {
+                throw ke;
+            }
+            if (ke != null && request.type != OpCode.multi) {
+                throw ke;
+            }
+
+            LOG.debug("{}", request);
+
+            if (request.isStale()) {
+                ServerMetrics.getMetrics().STALE_REPLIES.add(1);
+            }
+
+            if (request.isThrottled()) {
+              throw KeeperException.create(Code.THROTTLEDOP);
+            }
+
+            AuditHelper.addAuditLog(request, rc);
+
+            switch (request.type) {
+            case OpCode.ping: {
+                lastOp = "PING";
+                updateStats(request, lastOp, lastZxid);
+
+                responseSize = cnxn.sendResponse(new ReplyHeader(ClientCnxn.PING_XID, lastZxid, 0), null, "response");
+                return;
+            }
+            case OpCode.createSession: {
+                lastOp = "SESS";
+                updateStats(request, lastOp, lastZxid);
+
+                zks.finishSessionInit(request.cnxn, true);
+                return;
+            }
+            case OpCode.multi: {
+                lastOp = "MULT";
+                rsp = new MultiResponse();
+
+                for (ProcessTxnResult subTxnResult : rc.multiResult) {
+
+                    OpResult subResult;
+
+                    switch (subTxnResult.type) {
+                    case OpCode.check:
+                        subResult = new CheckResult();
+                        break;
+                    case OpCode.create:
+                        subResult = new CreateResult(subTxnResult.path);
+                        break;
+                    case OpCode.create2:
+                    case OpCode.createTTL:
+                    case OpCode.createContainer:
+                        subResult = new CreateResult(subTxnResult.path, subTxnResult.stat);
+                        break;
+                    case OpCode.delete:
+                    case OpCode.deleteContainer:
+                        subResult = new DeleteResult();
+                        break;
+                    case OpCode.setData:
+                        subResult = new SetDataResult(subTxnResult.stat);
+                        break;
+                    case OpCode.error:
+                        subResult = new ErrorResult(subTxnResult.err);
+                        if (subTxnResult.err == Code.SESSIONMOVED.intValue()) {
+                            throw new SessionMovedException();
+                        }
+                        break;
+                    default:
+                        throw new IOException("Invalid type of op");
                     }
-                });
-            });
 
-            dialog.addCloseButton();
-            dialog.show();
-        }).size(300f, 64f);
-    }
+                    ((MultiResponse) rsp).add(subResult);
+                }
 
-    public void show(Rules rules, Prov<Rules> resetter){
-        this.rules = rules;
-        this.resetter = resetter;
-        show();
-    }
+                break;
+            }
+            case OpCode.multiRead: {
+                lastOp = "MLTR";
+                MultiOperationRecord multiReadRecord = new MultiOperationRecord();
+                ByteBufferInputStream.byteBuffer2Record(request.request, multiReadRecord);
+                rsp = new MultiResponse();
+                OpResult subResult;
+                for (Op readOp : multiReadRecord) {
+                    try {
+                        Record rec;
+                        switch (readOp.getType()) {
+                        case OpCode.getChildren:
+                            rec = handleGetChildrenRequest(readOp.toRequestRecord(), cnxn, request.authInfo);
+                            subResult = new GetChildrenResult(((GetChildrenResponse) rec).getChildren());
+                            break;
+                        case OpCode.getData:
+                            rec = handleGetDataRequest(readOp.toRequestRecord(), cnxn, request.authInfo);
+                            GetDataResponse gdr = (GetDataResponse) rec;
+                            subResult = new GetDataResult(gdr.getData(), gdr.getStat());
+                            break;
+                        default:
+                            throw new IOException("Invalid type of readOp");
+                        }
+                    } catch (KeeperException e) {
+                        subResult = new ErrorResult(e.code().intValue());
+                    }
+                    ((MultiResponse) rsp).add(subResult);
+                }
+                break;
+            }
+            case OpCode.create: {
+                lastOp = "CREA";
+                rsp = new CreateResponse(rc.path);
+                err = Code.get(rc.err);
+                requestPathMetricsCollector.registerRequest(request.type, rc.path);
+                break;
+            }
+            case OpCode.create2:
+            case OpCode.createTTL:
+            case OpCode.createContainer: {
+                lastOp = "CREA";
+                rsp = new Create2Response(rc.path, rc.stat);
+                err = Code.get(rc.err);
+                requestPathMetricsCollector.registerRequest(request.type, rc.path);
+                break;
+            }
+            case OpCode.delete:
+            case OpCode.deleteContainer: {
+                lastOp = "DELE";
+                err = Code.get(rc.err);
+                requestPathMetricsCollector.registerRequest(request.type, rc.path);
+                break;
+            }
+            case OpCode.setData: {
+                lastOp = "SETD";
+                rsp = new SetDataResponse(rc.stat);
+                err = Code.get(rc.err);
+                requestPathMetricsCollector.registerRequest(request.type, rc.path);
+                break;
+            }
+            case OpCode.reconfig: {
+                lastOp = "RECO";
+                rsp = new GetDataResponse(
+                    ((QuorumZooKeeperServer) zks).self.getQuorumVerifier().toString().getBytes(),
+                    rc.stat);
+                err = Code.get(rc.err);
+                break;
+            }
+            case OpCode.setACL: {
+                lastOp = "SETA";
+                rsp = new SetACLResponse(rc.stat);
+                err = Code.get(rc.err);
+                requestPathMetricsCollector.registerRequest(request.type, rc.path);
+                break;
+            }
+            case OpCode.closeSession: {
+                lastOp = "CLOS";
+                err = Code.get(rc.err);
+                break;
+            }
+            case OpCode.sync: {
+                lastOp = "SYNC";
+                SyncRequest syncRequest = new SyncRequest();
+                ByteBufferInputStream.byteBuffer2Record(request.request, syncRequest);
+                rsp = new SyncResponse(syncRequest.getPath());
+                requestPathMetricsCollector.registerRequest(request.type, syncRequest.getPath());
+                break;
+            }
+            case OpCode.check: {
+                lastOp = "CHEC";
+                rsp = new SetDataResponse(rc.stat);
+                err = Code.get(rc.err);
+                break;
+            }
+            case OpCode.exists: {
+                lastOp = "EXIS";
+                // TODO we need to figure out the security requirement for this!
+                ExistsRequest existsRequest = new ExistsRequest();
+                ByteBufferInputStream.byteBuffer2Record(request.request, existsRequest);
+                path = existsRequest.getPath();
+                if (path.indexOf('\0') != -1) {
+                    throw new KeeperException.BadArgumentsException();
+                }
+                Stat stat = zks.getZKDatabase().statNode(path, existsRequest.getWatch() ? cnxn : null);
+                rsp = new ExistsResponse(stat);
+                requestPathMetricsCollector.registerRequest(request.type, path);
+                break;
+            }
+            case OpCode.getData: {
+                lastOp = "GETD";
+                GetDataRequest getDataRequest = new GetDataRequest();
+                ByteBufferInputStream.byteBuffer2Record(request.request, getDataRequest);
+                path = getDataRequest.getPath();
+                rsp = handleGetDataRequest(getDataRequest, cnxn, request.authInfo);
+                requestPathMetricsCollector.registerRequest(request.type, path);
+                break;
+            }
+            case OpCode.setWatches: {
+                lastOp = "SETW";
+                SetWatches setWatches = new SetWatches();
+                // TODO we really should not need this
+                request.request.rewind();
+                ByteBufferInputStream.byteBuffer2Record(request.request, setWatches);
+                long relativeZxid = setWatches.getRelativeZxid();
+                zks.getZKDatabase()
+                   .setWatches(
+                       relativeZxid,
+                       setWatches.getDataWatches(),
+                       setWatches.getExistWatches(),
+                       setWatches.getChildWatches(),
+                       Collections.emptyList(),
+                       Collections.emptyList(),
+                       cnxn);
+                break;
+            }
+            case OpCode.setWatches2: {
+                lastOp = "STW2";
+                SetWatches2 setWatches = new SetWatches2();
+                // TODO we really should not need this
+                request.request.rewind();
+                ByteBufferInputStream.byteBuffer2Record(request.request, setWatches);
+                long relativeZxid = setWatches.getRelativeZxid();
+                zks.getZKDatabase().setWatches(relativeZxid,
+                        setWatches.getDataWatches(),
+                        setWatches.getExistWatches(),
+                        setWatches.getChildWatches(),
+                        setWatches.getPersistentWatches(),
+                        setWatches.getPersistentRecursiveWatches(),
+                        cnxn);
+                break;
+            }
+            case OpCode.addWatch: {
+                lastOp = "ADDW";
+                AddWatchRequest addWatcherRequest = new AddWatchRequest();
+                ByteBufferInputStream.byteBuffer2Record(request.request,
+                        addWatcherRequest);
+                zks.getZKDatabase().addWatch(addWatcherRequest.getPath(), cnxn, addWatcherRequest.getMode());
+                rsp = new ErrorResponse(0);
+                break;
+            }
+            case OpCode.getACL: {
+                lastOp = "GETA";
+                GetACLRequest getACLRequest = new GetACLRequest();
+                ByteBufferInputStream.byteBuffer2Record(request.request, getACLRequest);
+                path = getACLRequest.getPath();
+                DataNode n = zks.getZKDatabase().getNode(path);
+                if (n == null) {
+                    throw new KeeperException.NoNodeException();
+                }
+                zks.checkACL(
+                    request.cnxn,
+                    zks.getZKDatabase().aclForNode(n),
+                    ZooDefs.Perms.READ | ZooDefs.Perms.ADMIN, request.authInfo, path,
+                    null);
 
-    void setup(){
-        cont.clear();
-        cont.pane(m -> main = m).get().setScrollingDisabled(true, false);
-        main.margin(10f);
-        main.button("@settings.reset", () -> {
-            rules = resetter.get();
-            setup();
-            requestKeyboard();
-            requestScroll();
-        }).size(300f, 50f);
-        main.left().defaults().fillX().left().pad(5);
-        main.row();
+                Stat stat = new Stat();
+                List<ACL> acl = zks.getZKDatabase().getACL(path, stat);
+                requestPathMetricsCollector.registerRequest(request.type, getACLRequest.getPath());
 
-        title("@rules.title.waves");
-        check("@rules.waves", b -> rules.waves = b, () -> rules.waves);
-        check("@rules.wavetimer", b -> rules.waveTimer = b, () -> rules.waveTimer);
-        check("@rules.waitForWaveToEnd", b -> rules.waitEnemies = b, () -> rules.waitEnemies);
-        number("@rules.wavespacing", false, f -> rules.waveSpacing = f * 60f, () -> rules.waveSpacing / 60f, () -> true, 1, Float.MAX_VALUE);
-        number("@rules.dropzoneradius", false, f -> rules.dropZoneRadius = f * tilesize, () -> rules.dropZoneRadius / tilesize, () -> true);
-
-        title("@rules.title.resourcesbuilding");
-        check("@rules.infiniteresources", b -> rules.infiniteResources = b, () -> rules.infiniteResources);
-        check("@rules.reactorexplosions", b -> rules.reactorExplosions = b, () -> rules.reactorExplosions);
-        check("@rules.schematic", b-> rules.schematicsAllowed = b, () -> rules.schematicsAllowed);
-        number("@rules.buildcostmultiplier", false, f -> rules.buildCostMultiplier = f, () -> rules.buildCostMultiplier, () -> !rules.infiniteResources);
-        number("@rules.buildspeedmultiplier", f -> rules.buildSpeedMultiplier = f, () -> rules.buildSpeedMultiplier, 0.00001f, 10000f);
-        number("@rules.deconstructrefundmultiplier", false, f -> rules.deconstructRefundMultiplier = f, () -> rules.deconstructRefundMultiplier, () -> !rules.infiniteResources);
-        number("@rules.blockhealthmultiplier", f -> rules.blockHealthMultiplier = f, () -> rules.blockHealthMultiplier);
-        number("@rules.blockdamagemultiplier", f -> rules.blockDamageMultiplier = f, () -> rules.blockDamageMultiplier);
-
-        main.button("@configure",
-            () -> loadoutDialog.show(Blocks.coreShard.itemCapacity, rules.loadout,
-                i -> true,
-                () -> rules.loadout.clear().add(new ItemStack(Items.copper, 100)),
-                () -> {}, () -> {}
-        )).left().width(300f);
-        main.row();
-
-        main.button("@bannedblocks", banDialog::show).left().width(300f);
-        main.row();
-
-        title("@rules.title.unit");
-        check("@rules.unitammo", b -> rules.unitAmmo = b, () -> rules.unitAmmo);
-        number("@rules.unithealthmultiplier", f -> rules.unitHealthMultiplier = f, () -> rules.unitHealthMultiplier);
-        number("@rules.unitdamagemultiplier", f -> rules.unitDamageMultiplier = f, () -> rules.unitDamageMultiplier);
-        number("@rules.unitbuildspeedmultiplier", f -> rules.unitBuildSpeedMultiplier = f, () -> rules.unitBuildSpeedMultiplier, 0.00001f, 100f);
-
-        title("@rules.title.enemy");
-        check("@rules.attack", b -> rules.attackMode = b, () -> rules.attackMode);
-        check("@rules.buildai", b -> rules.teams.get(rules.waveTeam).ai = rules.teams.get(rules.waveTeam).infiniteResources = b, () -> rules.teams.get(rules.waveTeam).ai);
-        number("@rules.enemycorebuildradius", f -> rules.enemyCoreBuildRadius = f * tilesize, () -> Math.min(rules.enemyCoreBuildRadius / tilesize, 200));
-
-        title("@rules.title.environment");
-        check("@rules.explosions", b -> rules.damageExplosions = b, () -> rules.damageExplosions);
-        check("@rules.fire", b -> rules.fire = b, () -> rules.fire);
-        check("@rules.lighting", b -> rules.lighting = b, () -> rules.lighting);
-        check("@rules.enemyLights", b -> rules.enemyLights = b, () -> rules.enemyLights);
-
-        main.button(b -> {
-            b.left();
-            b.table(Tex.pane, in -> {
-                in.stack(new Image(Tex.alphaBg), new Image(Tex.whiteui){{
-                    update(() -> setColor(rules.ambientLight));
-                }}).grow();
-            }).margin(4).size(50f).padRight(10);
-            b.add("@rules.ambientlight");
-        }, () -> ui.picker.show(rules.ambientLight, rules.ambientLight::set)).left().width(250f).row();
-
-        main.button("@rules.weather", this::weatherDialog).width(250f).left().row();
-    }
-
-    void number(String text, Floatc cons, Floatp prov){
-        number(text, false, cons, prov, () -> true, 0, Float.MAX_VALUE);
-    }
-
-    void number(String text, Floatc cons, Floatp prov, float min, float max){
-        number(text, false, cons, prov, () -> true, min, max);
-    }
-
-    void number(String text, boolean integer, Floatc cons, Floatp prov, Boolp condition){
-        number(text, integer, cons, prov, condition, 0, Float.MAX_VALUE);
-    }
-
-    void number(String text, Floatc cons, Floatp prov, Boolp condition){
-        number(text, false, cons, prov, condition, 0, Float.MAX_VALUE);
-    }
-
-    void number(String text, boolean integer, Floatc cons, Floatp prov, Boolp condition, float min, float max){
-        main.table(t -> {
-            t.left();
-            t.add(text).left().padRight(5)
-            .update(a -> a.setColor(condition.get() ? Color.white : Color.gray));
-            t.field((integer ? (int)prov.get() : prov.get()) + "", s -> cons.get(Strings.parseFloat(s)))
-            .padRight(100f)
-            .update(a -> a.setDisabled(!condition.get()))
-            .valid(f -> Strings.canParsePositiveFloat(f) && Strings.parseFloat(f) >= min && Strings.parseFloat(f) <= max).width(120f).left().addInputDialog();
-        }).padTop(0);
-        main.row();
-    }
-
-    void check(String text, Boolc cons, Boolp prov){
-        check(text, cons, prov, () -> true);
-    }
-
-    void check(String text, Boolc cons, Boolp prov, Boolp condition){
-        main.check(text, cons).checked(prov.get()).update(a -> a.setDisabled(!condition.get())).padRight(100f).get().left();
-        main.row();
-    }
-
-    void title(String text){
-        main.add(text).color(Pal.accent).padTop(20).padRight(100f).padBottom(-3);
-        main.row();
-        main.image().color(Pal.accent).height(3f).padRight(100f).padBottom(20);
-        main.row();
-    }
-
-    Cell<TextField> field(Table table, float value, Floatc setter){
-        return table.field(Strings.autoFixed(value, 2), v -> setter.get(Strings.parseFloat(v)))
-            .valid(Strings::canParsePositiveFloat)
-            .size(90f, 40f).pad(2f).addInputDialog();
-    }
-
-    void weatherDialog(){
-        BaseDialog dialog = new BaseDialog("@rules.weather");
-        Runnable[] rebuild = {null};
-
-        dialog.cont.pane(base -> {
-
-            rebuild[0] = () -> {
-                base.clearChildren();
-                int cols = Math.max(1, Core.graphics.getWidth() / 460);
-                int idx = 0;
-
-                for(WeatherEntry entry : rules.weather){
-                    base.top();
-                    //main container
-                    base.table(Tex.pane, c -> {
-                        c.margin(0);
-
-                        //icons to perform actions
-                        c.table(Tex.whiteui, t -> {
-                            t.setColor(Pal.gray);
-
-                            t.top().left();
-                            t.add(entry.weather.localizedName).left().padLeft(6);
-
-                            t.add().growX();
-
-                            ImageButtonStyle style = Styles.geni;
-                            t.defaults().size(42f);
-
-                            t.button(Icon.cancel, style, () -> {
-                                rules.weather.remove(entry);
-                                rebuild[0].run();
-                            });
-                        }).growX();
-
-                        c.row();
-
-                        //all the options
-                        c.table(f -> {
-                            f.marginLeft(4);
-                            f.left().top();
-
-                            f.defaults().padRight(4).left();
-
-                            f.add("@rules.weather.duration");
-                            field(f, entry.minDuration / toMinutes, v -> entry.minDuration = v * toMinutes);
-                            f.add("@waves.to");
-                            field(f, entry.maxDuration / toMinutes, v -> entry.maxDuration = v * toMinutes);
-                            f.add("@unit.minutes");
-
-                            f.row();
-
-                            f.add("@rules.weather.frequency");
-                            field(f, entry.minFrequency / toMinutes, v -> entry.minFrequency = v * toMinutes);
-                            f.add("@waves.to");
-                            field(f, entry.maxFrequency / toMinutes, v -> entry.maxFrequency = v * toMinutes);
-                            f.add("@unit.minutes");
-
-                            //intensity can't currently be customized
-
-                        }).grow().left().pad(6).top();
-                    }).width(410f).pad(3).top().left().fillY();
-
-                    if(++idx % cols == 0){
-                        base.row();
+                try {
+                    zks.checkACL(
+                        request.cnxn,
+                        zks.getZKDatabase().aclForNode(n),
+                        ZooDefs.Perms.ADMIN,
+                        request.authInfo,
+                        path,
+                        null);
+                    rsp = new GetACLResponse(acl, stat);
+                } catch (KeeperException.NoAuthException e) {
+                    List<ACL> acl1 = new ArrayList<ACL>(acl.size());
+                    for (ACL a : acl) {
+                        if ("digest".equals(a.getId().getScheme())) {
+                            Id id = a.getId();
+                            Id id1 = new Id(id.getScheme(), id.getId().replaceAll(":.*", ":x"));
+                            acl1.add(new ACL(a.getPerms(), id1));
+                        } else {
+                            acl1.add(a);
+                        }
+                    }
+                    rsp = new GetACLResponse(acl1, stat);
+                }
+                break;
+            }
+            case OpCode.getChildren: {
+                lastOp = "GETC";
+                GetChildrenRequest getChildrenRequest = new GetChildrenRequest();
+                ByteBufferInputStream.byteBuffer2Record(request.request, getChildrenRequest);
+                path = getChildrenRequest.getPath();
+                rsp = handleGetChildrenRequest(getChildrenRequest, cnxn, request.authInfo);
+                requestPathMetricsCollector.registerRequest(request.type, path);
+                break;
+            }
+            case OpCode.getAllChildrenNumber: {
+                lastOp = "GETACN";
+                GetAllChildrenNumberRequest getAllChildrenNumberRequest = new GetAllChildrenNumberRequest();
+                ByteBufferInputStream.byteBuffer2Record(request.request, getAllChildrenNumberRequest);
+                path = getAllChildrenNumberRequest.getPath();
+                DataNode n = zks.getZKDatabase().getNode(path);
+                if (n == null) {
+                    throw new KeeperException.NoNodeException();
+                }
+                zks.checkACL(
+                    request.cnxn,
+                    zks.getZKDatabase().aclForNode(n),
+                    ZooDefs.Perms.READ,
+                    request.authInfo,
+                    path,
+                    null);
+                int number = zks.getZKDatabase().getAllChildrenNumber(path);
+                rsp = new GetAllChildrenNumberResponse(number);
+                break;
+            }
+            case OpCode.getChildren2: {
+                lastOp = "GETC";
+                GetChildren2Request getChildren2Request = new GetChildren2Request();
+                ByteBufferInputStream.byteBuffer2Record(request.request, getChildren2Request);
+                Stat stat = new Stat();
+                path = getChildren2Request.getPath();
+                DataNode n = zks.getZKDatabase().getNode(path);
+                if (n == null) {
+                    throw new KeeperException.NoNodeException();
+                }
+                zks.checkACL(
+                    request.cnxn,
+                    zks.getZKDatabase().aclForNode(n),
+                    ZooDefs.Perms.READ,
+                    request.authInfo, path,
+                    null);
+                List<String> children = zks.getZKDatabase()
+                                           .getChildren(path, stat, getChildren2Request.getWatch() ? cnxn : null);
+                rsp = new GetChildren2Response(children, stat);
+                requestPathMetricsCollector.registerRequest(request.type, path);
+                break;
+            }
+            case OpCode.checkWatches: {
+                lastOp = "CHKW";
+                CheckWatchesRequest checkWatches = new CheckWatchesRequest();
+                ByteBufferInputStream.byteBuffer2Record(request.request, checkWatches);
+                WatcherType type = WatcherType.fromInt(checkWatches.getType());
+                path = checkWatches.getPath();
+                boolean containsWatcher = zks.getZKDatabase().containsWatcher(path, type, cnxn);
+                if (!containsWatcher) {
+                    String msg = String.format(Locale.ENGLISH, "%s (type: %s)", path, type);
+                    throw new KeeperException.NoWatcherException(msg);
+                }
+                requestPathMetricsCollector.registerRequest(request.type, checkWatches.getPath());
+                break;
+            }
+            case OpCode.removeWatches: {
+                lastOp = "REMW";
+                RemoveWatchesRequest removeWatches = new RemoveWatchesRequest();
+                ByteBufferInputStream.byteBuffer2Record(request.request, removeWatches);
+                WatcherType type = WatcherType.fromInt(removeWatches.getType());
+                path = removeWatches.getPath();
+                boolean removed = zks.getZKDatabase().removeWatch(path, type, cnxn);
+                if (!removed) {
+                    String msg = String.format(Locale.ENGLISH, "%s (type: %s)", path, type);
+                    throw new KeeperException.NoWatcherException(msg);
+                }
+                requestPathMetricsCollector.registerRequest(request.type, removeWatches.getPath());
+                break;
+            }
+            case OpCode.getEphemerals: {
+                lastOp = "GETE";
+                GetEphemeralsRequest getEphemerals = new GetEphemeralsRequest();
+                ByteBufferInputStream.byteBuffer2Record(request.request, getEphemerals);
+                String prefixPath = getEphemerals.getPrefixPath();
+                Set<String> allEphems = zks.getZKDatabase().getDataTree().getEphemerals(request.sessionId);
+                List<String> ephemerals = new ArrayList<>();
+                if (StringUtils.isBlank(prefixPath) || "/".equals(prefixPath.trim())) {
+                    ephemerals.addAll(allEphems);
+                } else {
+                    for (String p : allEphems) {
+                        if (p.startsWith(prefixPath)) {
+                            ephemerals.add(p);
+                        }
                     }
                 }
-            };
-
-            rebuild[0].run();
-        }).grow();
-
-        dialog.addCloseButton();
-
-        dialog.buttons.button("@add", Icon.add, () -> {
-            BaseDialog addd = new BaseDialog("@add");
-            addd.cont.pane(t -> {
-                t.background(Tex.button);
-                int i = 0;
-                for(Weather weather : content.<Weather>getBy(ContentType.weather)){
-
-                    t.button(weather.localizedName, Styles.cleart, () -> {
-                        rules.weather.add(new WeatherEntry(weather));
-                        rebuild[0].run();
-
-                        addd.hide();
-                    }).size(140f, 50f);
-                    if(++i % 2 == 0) t.row();
-                }
-            });
-            addd.addCloseButton();
-            addd.show();
-        }).width(170f);
-
-        //reset cooldown to random number
-        dialog.hidden(() -> {
-            float sum = 0;
-            Seq<WeatherEntry> sh = rules.weather.copy();
-            sh.shuffle();
-
-            for(WeatherEntry w : sh){
-                //add the previous cooldowns to the sum so weather events are staggered and don't happen all at once.
-                w.cooldown = sum + Mathf.random(w.minFrequency, w.maxFrequency);
-                sum += w.cooldown;
+                rsp = new GetEphemeralsResponse(ephemerals);
+                break;
             }
-        });
+            }
+        } catch (SessionMovedException e) {
+            // session moved is a connection level error, we need to tear
+            // down the connection otw ZOOKEEPER-710 might happen
+            // ie client on slow follower starts to renew session, fails
+            // before this completes, then tries the fast follower (leader)
+            // and is successful, however the initial renew is then
+            // successfully fwd/processed by the leader and as a result
+            // the client and leader disagree on where the client is most
+            // recently attached (and therefore invalid SESSION MOVED generated)
+            cnxn.sendCloseSession();
+            return;
+        } catch (KeeperException e) {
+            err = e.code();
+        } catch (Exception e) {
+            // log at error level as we are returning a marshalling
+            // error to the user
+            LOG.error("Failed to process {}", request, e);
+            StringBuilder sb = new StringBuilder();
+            ByteBuffer bb = request.request;
+            bb.rewind();
+            while (bb.hasRemaining()) {
+                sb.append(Integer.toHexString(bb.get() & 0xff));
+            }
+            LOG.error("Dumping request buffer: 0x{}", sb.toString());
+            err = Code.MARSHALLINGERROR;
+        }
 
-        dialog.show();
+        ReplyHeader hdr = new ReplyHeader(request.cxid, lastZxid, err.intValue());
+
+        updateStats(request, lastOp, lastZxid);
+
+        try {
+            if (path == null || rsp == null) {
+                responseSize = cnxn.sendResponse(hdr, rsp, "response");
+            } else {
+                int opCode = request.type;
+                Stat stat = null;
+                // Serialized read and get children responses could be cached by the connection
+                // object. Cache entries are identified by their path and last modified zxid,
+                // so these values are passed along with the response.
+                switch (opCode) {
+                    case OpCode.getData : {
+                        GetDataResponse getDataResponse = (GetDataResponse) rsp;
+                        stat = getDataResponse.getStat();
+                        responseSize = cnxn.sendResponse(hdr, rsp, "response", path, stat, opCode);
+                        break;
+                    }
+                    case OpCode.getChildren2 : {
+                        GetChildren2Response getChildren2Response = (GetChildren2Response) rsp;
+                        stat = getChildren2Response.getStat();
+                        responseSize = cnxn.sendResponse(hdr, rsp, "response", path, stat, opCode);
+                        break;
+                    }
+                    default:
+                        responseSize = cnxn.sendResponse(hdr, rsp, "response");
+                }
+            }
+
+            if (request.type == OpCode.closeSession) {
+                cnxn.sendCloseSession();
+            }
+        } catch (IOException e) {
+            LOG.error("FIXMSG", e);
+        } finally {
+            ServerMetrics.getMetrics().RESPONSE_BYTES.add(responseSize);
+        }
     }
+
+    private Record handleGetChildrenRequest(Record request, ServerCnxn cnxn, List<Id> authInfo) throws KeeperException, IOException {
+        GetChildrenRequest getChildrenRequest = (GetChildrenRequest) request;
+        String path = getChildrenRequest.getPath();
+        DataNode n = zks.getZKDatabase().getNode(path);
+        if (n == null) {
+            throw new KeeperException.NoNodeException();
+        }
+        zks.checkACL(cnxn, zks.getZKDatabase().aclForNode(n), ZooDefs.Perms.READ, authInfo, path, null);
+        List<String> children = zks.getZKDatabase()
+                                   .getChildren(path, null, getChildrenRequest.getWatch() ? cnxn : null);
+        return new GetChildrenResponse(children);
+    }
+
+    private Record handleGetDataRequest(Record request, ServerCnxn cnxn, List<Id> authInfo) throws KeeperException, IOException {
+        GetDataRequest getDataRequest = (GetDataRequest) request;
+        String path = getDataRequest.getPath();
+        DataNode n = zks.getZKDatabase().getNode(path);
+        if (n == null) {
+            throw new KeeperException.NoNodeException();
+        }
+        zks.checkACL(cnxn, zks.getZKDatabase().aclForNode(n), ZooDefs.Perms.READ, authInfo, path, null);
+        Stat stat = new Stat();
+        byte[] b = zks.getZKDatabase().getData(path, stat, getDataRequest.getWatch() ? cnxn : null);
+        return new GetDataResponse(b, stat);
+    }
+
+    private boolean closeSession(ServerCnxnFactory serverCnxnFactory, long sessionId) {
+        if (serverCnxnFactory == null) {
+            return false;
+        }
+        return serverCnxnFactory.closeSession(sessionId, ServerCnxn.DisconnectReason.CLIENT_CLOSED_SESSION);
+    }
+
+    private boolean connClosedByClient(Request request) {
+        return request.cnxn == null;
+    }
+
+    public void shutdown() {
+        // we are the final link in the chain
+        LOG.info("shutdown of request processor complete");
+    }
+
+    private void updateStats(Request request, String lastOp, long lastZxid) {
+        if (request.cnxn == null) {
+            return;
+        }
+        long currentTime = Time.currentElapsedTime();
+        zks.serverStats().updateLatency(request, currentTime);
+        request.cnxn.updateStatsForResponse(request.cxid, lastZxid, lastOp, request.createTime, currentTime);
+    }
+
 }
