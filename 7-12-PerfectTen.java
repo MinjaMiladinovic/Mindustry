@@ -1,498 +1,1026 @@
-package org.apache.zookeeper.server;
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.apache.pdfbox.examples.pdmodel;
 
-import org.apache.zookeeper.metrics.Counter;
-import org.apache.zookeeper.metrics.MetricsContext;
-import org.apache.zookeeper.metrics.MetricsContext.DetailLevel;
-import org.apache.zookeeper.metrics.MetricsProvider;
-import org.apache.zookeeper.metrics.Summary;
-import org.apache.zookeeper.metrics.SummarySet;
-import org.apache.zookeeper.metrics.impl.DefaultMetricsProvider;
-import org.apache.zookeeper.metrics.impl.NullMetricsProvider;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
-public final class ServerMetrics {
+import java.awt.geom.Rectangle2D;
+import java.awt.image.BufferedImage;
+import java.awt.image.DataBufferInt;
+import java.io.BufferedReader;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.security.GeneralSecurityException;
+import java.security.KeyStore;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
+import java.security.Security;
+import java.security.UnrecoverableKeyException;
+import java.security.cert.Certificate;
+import java.security.cert.CertificateException;
+import java.security.cert.CertificateFactory;
+import java.security.cert.X509CRL;
+import java.security.cert.X509Certificate;
+import java.text.MessageFormat;
+import java.util.Arrays;
+import java.util.Calendar;
+import java.util.Collection;
+import java.util.Date;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 
-    private static final Logger LOG = LoggerFactory.getLogger(ServerMetrics.class);
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.cos.COSArray;
+import org.apache.pdfbox.cos.COSDictionary;
+import org.apache.pdfbox.cos.COSInputStream;
+import org.apache.pdfbox.cos.COSName;
+import org.apache.pdfbox.cos.COSStream;
+import org.apache.pdfbox.examples.interactive.form.CreateSimpleForm;
+import org.apache.pdfbox.examples.signature.CreateEmbeddedTimeStamp;
+import org.apache.pdfbox.examples.signature.CreateEmptySignatureForm;
+import org.apache.pdfbox.examples.signature.CreateSignature;
+import org.apache.pdfbox.examples.signature.CreateSignedTimeStamp;
+import org.apache.pdfbox.examples.signature.CreateVisibleSignature;
+import org.apache.pdfbox.examples.signature.CreateVisibleSignature2;
+import org.apache.pdfbox.examples.signature.SigUtils;
+import org.apache.pdfbox.examples.signature.cert.CertificateVerificationException;
+import org.apache.pdfbox.examples.signature.validation.AddValidationInformation;
+import org.apache.pdfbox.io.IOUtils;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDDocumentCatalog;
+import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.PDPageContentStream;
+import org.apache.pdfbox.pdmodel.encryption.SecurityProvider;
+import org.apache.pdfbox.pdmodel.interactive.annotation.PDAppearanceDictionary;
+import org.apache.pdfbox.pdmodel.interactive.digitalsignature.ExternalSigningSupport;
+import org.apache.pdfbox.pdmodel.interactive.digitalsignature.PDSignature;
+import org.apache.pdfbox.pdmodel.interactive.form.PDField;
+import org.apache.pdfbox.rendering.PDFRenderer;
+import org.apache.pdfbox.util.Hex;
+import org.apache.wink.client.MockHttpServer;
+import org.bouncycastle.asn1.ocsp.OCSPResponseStatus;
+import org.bouncycastle.cert.X509CertificateHolder;
+import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
+import org.bouncycastle.cert.ocsp.BasicOCSPResp;
+import org.bouncycastle.cert.ocsp.OCSPException;
+import org.bouncycastle.cert.ocsp.OCSPResp;
+import org.bouncycastle.cms.CMSException;
+import org.bouncycastle.cms.CMSProcessableByteArray;
+import org.bouncycastle.cms.CMSSignedData;
+import org.bouncycastle.cms.SignerInformation;
+import org.bouncycastle.cms.jcajce.JcaSimpleSignerInfoVerifierBuilder;
+import org.bouncycastle.crypto.prng.FixedSecureRandom;
+import org.bouncycastle.operator.ContentVerifierProvider;
+import org.bouncycastle.operator.OperatorCreationException;
+import org.bouncycastle.operator.jcajce.JcaContentVerifierProviderBuilder;
+import org.bouncycastle.tsp.TSPException;
+import org.bouncycastle.tsp.TSPValidationException;
+import org.bouncycastle.tsp.TimeStampToken;
+import org.bouncycastle.tsp.TimeStampTokenInfo;
+import org.bouncycastle.util.CollectionStore;
+import org.bouncycastle.util.Selector;
+import org.bouncycastle.util.Store;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
+
+/**
+ * Test for CreateSignature. Each test case will run twice: once with SignatureInterface
+ * and once using external signature creation scenario.
+ */
+class TestCreateSignature
+{
+    private static CertificateFactory certificateFactory = null;
+    private static KeyStore keyStore = null;
+    private static final String IN_DIR = "src/test/resources/org/apache/pdfbox/examples/signature/";
+    private static final String OUT_DIR = "target/test-output/";
+    private static final String KEYSTORE_PATH = IN_DIR + "keystore.p12";
+    private static final String JPEG_PATH = IN_DIR + "stamp.jpg";
+    private static final String PASSWORD = "123456";
+    private static final String TSA_RESPONSE = "tsa_response.asn1";
+    private static Certificate certificate;
+    private static String tsa;
+
+
+    public boolean externallySign;
 
     /**
-     * Dummy instance useful for tests.
+     * Values for {@link #externallySign} test parameter to specify if signing should be conducted
+     * using externally signing scenario ({@code true}) or SignatureInterface ({@code false}).
      */
-    public static final ServerMetrics NULL_METRICS = new ServerMetrics(NullMetricsProvider.INSTANCE);
+
+    private static Collection<Boolean> signingTypes()
+    {
+        return Arrays.asList(false, true);
+    }
+
+    @BeforeAll
+    static void init() throws Exception
+    {
+        Security.addProvider(SecurityProvider.getProvider());
+        certificateFactory = CertificateFactory.getInstance("X.509");
+
+        // load the keystore
+        keyStore = KeyStore.getInstance("PKCS12");
+        keyStore.load(new FileInputStream(KEYSTORE_PATH), PASSWORD.toCharArray());
+
+        new File("target/test-output").mkdirs();
+
+        certificate = keyStore.getCertificateChain(keyStore.aliases().nextElement())[0];
+        tsa = System.getProperty("org.apache.pdfbox.examples.pdmodel.tsa");
+    }
 
     /**
-     * Dummy instance useful for tests.
-     */
-    public static final ServerMetrics DEFAULT_METRICS_FOR_TESTS = new ServerMetrics(new DefaultMetricsProvider());
-
-    /**
-     * Real instance used for tracking server side metrics. The final value is
-     * assigned after the {@link MetricsProvider} bootstrap.
-     */
-    private static volatile ServerMetrics CURRENT = DEFAULT_METRICS_FOR_TESTS;
-
-    /**
-     * Access current ServerMetrics.
+     * Signs a PDF using the "adbe.pkcs7.detached" SubFilter with the SHA-256 digest.
      *
-     * @return a reference to the current Metrics
+     * @throws IOException
+     * @throws GeneralSecurityException
+     * @throws CMSException
+     * @throws OperatorCreationException
+     * @throws TSPException
+     * @throws CertificateVerificationException
      */
-    public static ServerMetrics getMetrics() {
-        return CURRENT;
-    }
+    @ParameterizedTest
+	@MethodSource("signingTypes")
+    void testDetachedSHA256(boolean externallySign)
+            throws IOException, CMSException, OperatorCreationException, GeneralSecurityException,
+                   TSPException, CertificateVerificationException
+    {
+        // sign PDF
+        CreateSignature signing = new CreateSignature(keyStore, PASSWORD.toCharArray());
+        signing.setExternalSigning(externallySign);
 
-    public static void metricsProviderInitialized(MetricsProvider metricsProvider) {
-        LOG.info("ServerMetrics initialized with provider {}", metricsProvider);
-        CURRENT = new ServerMetrics(metricsProvider);
-    }
+        final String fileName = getOutputFileName("signed{0}.pdf");
+        final String fileName2 = getOutputFileName("signed{0}-late-tsa.pdf");
+        signing.signDetached(new File(IN_DIR + "sign_me.pdf"), new File(OUT_DIR + fileName));
 
-    private ServerMetrics(MetricsProvider metricsProvider) {
-        this.metricsProvider = metricsProvider;
-        MetricsContext metricsContext = this.metricsProvider.getRootContext();
+        checkSignature(new File(IN_DIR, "sign_me.pdf"), new File(OUT_DIR, fileName), false);
 
-        FSYNC_TIME = metricsContext.getSummary("fsynctime", DetailLevel.BASIC);
-
-        SNAPSHOT_TIME = metricsContext.getSummary("snapshottime", DetailLevel.BASIC);
-        DB_INIT_TIME = metricsContext.getSummary("dbinittime", DetailLevel.BASIC);
-        READ_LATENCY = metricsContext.getSummary("readlatency", DetailLevel.ADVANCED);
-        UPDATE_LATENCY = metricsContext.getSummary("updatelatency", DetailLevel.ADVANCED);
-        PROPAGATION_LATENCY = metricsContext.getSummary("propagation_latency", DetailLevel.ADVANCED);
-        FOLLOWER_SYNC_TIME = metricsContext.getSummary("follower_sync_time", DetailLevel.BASIC);
-        ELECTION_TIME = metricsContext.getSummary("election_time", DetailLevel.BASIC);
-        LOOKING_COUNT = metricsContext.getCounter("looking_count");
-        DIFF_COUNT = metricsContext.getCounter("diff_count");
-        SNAP_COUNT = metricsContext.getCounter("snap_count");
-        COMMIT_COUNT = metricsContext.getCounter("commit_count");
-        CONNECTION_REQUEST_COUNT = metricsContext.getCounter("connection_request_count");
-        CONNECTION_TOKEN_DEFICIT = metricsContext.getSummary("connection_token_deficit", DetailLevel.BASIC);
-        CONNECTION_REJECTED = metricsContext.getCounter("connection_rejected");
-
-        INFLIGHT_SNAP_COUNT = metricsContext.getSummary("inflight_snap_count", DetailLevel.BASIC);
-        INFLIGHT_DIFF_COUNT = metricsContext.getSummary("inflight_diff_count", DetailLevel.BASIC);
-
-        WRITE_PER_NAMESPACE = metricsContext.getSummarySet("write_per_namespace", DetailLevel.BASIC);
-        READ_PER_NAMESPACE = metricsContext.getSummarySet("read_per_namespace", DetailLevel.BASIC);
-
-        BYTES_RECEIVED_COUNT = metricsContext.getCounter("bytes_received_count");
-        UNRECOVERABLE_ERROR_COUNT = metricsContext.getCounter("unrecoverable_error_count");
-
-        NODE_CREATED_WATCHER = metricsContext.getSummary("node_created_watch_count", DetailLevel.BASIC);
-        NODE_DELETED_WATCHER = metricsContext.getSummary("node_deleted_watch_count", DetailLevel.BASIC);
-        NODE_CHANGED_WATCHER = metricsContext.getSummary("node_changed_watch_count", DetailLevel.BASIC);
-        NODE_CHILDREN_WATCHER = metricsContext.getSummary("node_children_watch_count", DetailLevel.BASIC);
-
-        /*
-         * Number of dead watchers in DeadWatcherListener
-         */
-        ADD_DEAD_WATCHER_STALL_TIME = metricsContext.getCounter("add_dead_watcher_stall_time");
-        DEAD_WATCHERS_QUEUED = metricsContext.getCounter("dead_watchers_queued");
-        DEAD_WATCHERS_CLEARED = metricsContext.getCounter("dead_watchers_cleared");
-        DEAD_WATCHERS_CLEANER_LATENCY = metricsContext.getSummary("dead_watchers_cleaner_latency", DetailLevel.ADVANCED);
-
-        RESPONSE_PACKET_CACHE_HITS = metricsContext.getCounter("response_packet_cache_hits");
-        RESPONSE_PACKET_CACHE_MISSING = metricsContext.getCounter("response_packet_cache_misses");
-        RESPONSE_PACKET_GET_CHILDREN_CACHE_HITS = metricsContext.getCounter("response_packet_get_children_cache_hits");
-        RESPONSE_PACKET_GET_CHILDREN_CACHE_MISSING = metricsContext.getCounter("response_packet_get_children_cache_misses");
-
-        ENSEMBLE_AUTH_SUCCESS = metricsContext.getCounter("ensemble_auth_success");
-
-        ENSEMBLE_AUTH_FAIL = metricsContext.getCounter("ensemble_auth_fail");
-
-        ENSEMBLE_AUTH_SKIP = metricsContext.getCounter("ensemble_auth_skip");
-
-        PREP_PROCESSOR_QUEUE_TIME = metricsContext.getSummary("prep_processor_queue_time_ms", DetailLevel.ADVANCED);
-        PREP_PROCESSOR_QUEUE_SIZE = metricsContext.getSummary("prep_processor_queue_size", DetailLevel.BASIC);
-        PREP_PROCESSOR_QUEUED = metricsContext.getCounter("prep_processor_request_queued");
-        OUTSTANDING_CHANGES_QUEUED = metricsContext.getCounter("outstanding_changes_queued");
-        OUTSTANDING_CHANGES_REMOVED = metricsContext.getCounter("outstanding_changes_removed");
-        PREP_PROCESS_TIME = metricsContext.getSummary("prep_process_time", DetailLevel.BASIC);
-        PROPOSAL_PROCESS_TIME = metricsContext.getSummary("proposal_process_time", DetailLevel.BASIC);
-        CLOSE_SESSION_PREP_TIME = metricsContext.getSummary("close_session_prep_time", DetailLevel.ADVANCED);
-
-        REVALIDATE_COUNT = metricsContext.getCounter("revalidate_count");
-        CONNECTION_DROP_COUNT = metricsContext.getCounter("connection_drop_count");
-        CONNECTION_REVALIDATE_COUNT = metricsContext.getCounter("connection_revalidate_count");
-
-        // Expiry queue stats
-        SESSIONLESS_CONNECTIONS_EXPIRED = metricsContext.getCounter("sessionless_connections_expired");
-        STALE_SESSIONS_EXPIRED = metricsContext.getCounter("stale_sessions_expired");
-
-        /*
-         * Number of requests that are in the session queue.
-         */
-        REQUESTS_IN_SESSION_QUEUE = metricsContext.getSummary("requests_in_session_queue", DetailLevel.BASIC);
-        PENDING_SESSION_QUEUE_SIZE = metricsContext.getSummary("pending_session_queue_size", DetailLevel.BASIC);
-        /*
-         * Consecutive number of read requests that are in the session queue right after a commit request.
-         */
-        READS_AFTER_WRITE_IN_SESSION_QUEUE = metricsContext.getSummary("reads_after_write_in_session_queue", DetailLevel.BASIC);
-        READ_ISSUED_FROM_SESSION_QUEUE = metricsContext.getSummary("reads_issued_from_session_queue", DetailLevel.BASIC);
-        SESSION_QUEUES_DRAINED = metricsContext.getSummary("session_queues_drained", DetailLevel.BASIC);
-
-        TIME_WAITING_EMPTY_POOL_IN_COMMIT_PROCESSOR_READ = metricsContext.getSummary("time_waiting_empty_pool_in_commit_processor_read_ms", DetailLevel.BASIC);
-        WRITE_BATCH_TIME_IN_COMMIT_PROCESSOR = metricsContext.getSummary("write_batch_time_in_commit_processor", DetailLevel.BASIC);
-
-        CONCURRENT_REQUEST_PROCESSING_IN_COMMIT_PROCESSOR = metricsContext.getSummary("concurrent_request_processing_in_commit_processor", DetailLevel.BASIC);
-
-        READS_QUEUED_IN_COMMIT_PROCESSOR = metricsContext.getSummary("read_commit_proc_req_queued", DetailLevel.BASIC);
-        WRITES_QUEUED_IN_COMMIT_PROCESSOR = metricsContext.getSummary("write_commit_proc_req_queued", DetailLevel.BASIC);
-        COMMITS_QUEUED_IN_COMMIT_PROCESSOR = metricsContext.getSummary("commit_commit_proc_req_queued", DetailLevel.BASIC);
-        COMMITS_QUEUED = metricsContext.getCounter("request_commit_queued");
-        READS_ISSUED_IN_COMMIT_PROC = metricsContext.getSummary("read_commit_proc_issued", DetailLevel.BASIC);
-        WRITES_ISSUED_IN_COMMIT_PROC = metricsContext.getSummary("write_commit_proc_issued", DetailLevel.BASIC);
-
-        THROTTLED_OPS = metricsContext.getCounter("throttled_ops");
-
-        /**
-         * Time spent by a read request in the commit processor.
-         */
-        READ_COMMITPROC_TIME = metricsContext.getSummary("read_commitproc_time_ms", DetailLevel.ADVANCED);
-
-        /**
-         * Time spent by a write request in the commit processor.
-         */
-        WRITE_COMMITPROC_TIME = metricsContext.getSummary("write_commitproc_time_ms", DetailLevel.ADVANCED);
-
-        /**
-         * Time spent by a committed request, for a locally issued write, in the
-         * commit processor.
-         */
-        LOCAL_WRITE_COMMITTED_TIME = metricsContext.getSummary("local_write_committed_time_ms", DetailLevel.ADVANCED);
-
-        /**
-         * Time spent by a committed request for a write, issued by other server, in the
-         * commit processor.
-         */
-        SERVER_WRITE_COMMITTED_TIME = metricsContext.getSummary("server_write_committed_time_ms", DetailLevel.ADVANCED);
-
-        COMMIT_PROCESS_TIME = metricsContext.getSummary("commit_process_time", DetailLevel.BASIC);
-
-        /**
-         * Observer Master processing metrics.
-         */
-        OM_PROPOSAL_PROCESS_TIME = metricsContext.getSummary("om_proposal_process_time_ms", DetailLevel.ADVANCED);
-        OM_COMMIT_PROCESS_TIME = metricsContext.getSummary("om_commit_process_time_ms", DetailLevel.ADVANCED);
-
-        /**
-         * Time spent by the final processor. This is tracked in the commit processor.
-         */
-        READ_FINAL_PROC_TIME = metricsContext.getSummary("read_final_proc_time_ms", DetailLevel.ADVANCED);
-        WRITE_FINAL_PROC_TIME = metricsContext.getSummary("write_final_proc_time_ms", DetailLevel.ADVANCED);
-
-        PROPOSAL_LATENCY = metricsContext.getSummary("proposal_latency", DetailLevel.ADVANCED);
-        PROPOSAL_ACK_CREATION_LATENCY = metricsContext.getSummary("proposal_ack_creation_latency", DetailLevel.ADVANCED);
-        COMMIT_PROPAGATION_LATENCY = metricsContext.getSummary("commit_propagation_latency", DetailLevel.ADVANCED);
-        LEARNER_PROPOSAL_RECEIVED_COUNT = metricsContext.getCounter("learner_proposal_received_count");
-        LEARNER_COMMIT_RECEIVED_COUNT = metricsContext.getCounter("learner_commit_received_count");
-
-        /**
-         * Learner handler quorum packet metrics.
-         */
-        LEARNER_HANDLER_QP_SIZE = metricsContext.getSummarySet("learner_handler_qp_size", DetailLevel.BASIC);
-        LEARNER_HANDLER_QP_TIME = metricsContext.getSummarySet("learner_handler_qp_time_ms", DetailLevel.ADVANCED);
-
-        STARTUP_TXNS_LOADED = metricsContext.getSummary("startup_txns_loaded", DetailLevel.BASIC);
-        STARTUP_TXNS_LOAD_TIME = metricsContext.getSummary("startup_txns_load_time", DetailLevel.BASIC);
-        STARTUP_SNAP_LOAD_TIME = metricsContext.getSummary("startup_snap_load_time", DetailLevel.BASIC);
-
-        SYNC_PROCESSOR_QUEUE_AND_FLUSH_TIME = metricsContext.getSummary("sync_processor_queue_and_flush_time_ms", DetailLevel.ADVANCED);
-        SYNC_PROCESSOR_QUEUE_SIZE = metricsContext.getSummary("sync_processor_queue_size", DetailLevel.BASIC);
-        SYNC_PROCESSOR_QUEUED = metricsContext.getCounter("sync_processor_request_queued");
-        SYNC_PROCESSOR_QUEUE_TIME = metricsContext.getSummary("sync_processor_queue_time_ms", DetailLevel.ADVANCED);
-        SYNC_PROCESSOR_FLUSH_TIME = metricsContext.getSummary("sync_processor_queue_flush_time_ms", DetailLevel.ADVANCED);
-        SYNC_PROCESS_TIME = metricsContext.getSummary("sync_process_time", DetailLevel.BASIC);
-
-        BATCH_SIZE = metricsContext.getSummary("sync_processor_batch_size", DetailLevel.BASIC);
-
-        QUORUM_ACK_LATENCY = metricsContext.getSummary("quorum_ack_latency", DetailLevel.ADVANCED);
-        ACK_LATENCY = metricsContext.getSummarySet("ack_latency", DetailLevel.ADVANCED);
-        PROPOSAL_COUNT = metricsContext.getCounter("proposal_count");
-        QUIT_LEADING_DUE_TO_DISLOYAL_VOTER = metricsContext.getCounter("quit_leading_due_to_disloyal_voter");
-
-        STALE_REQUESTS = metricsContext.getCounter("stale_requests");
-        STALE_REQUESTS_DROPPED = metricsContext.getCounter("stale_requests_dropped");
-        STALE_REPLIES = metricsContext.getCounter("stale_replies");
-        REQUEST_THROTTLE_QUEUE_TIME = metricsContext.getSummary("request_throttle_queue_time_ms", DetailLevel.ADVANCED);
-        REQUEST_THROTTLE_WAIT_COUNT = metricsContext.getCounter("request_throttle_wait_count");
-        LARGE_REQUESTS_REJECTED = metricsContext.getCounter("large_requests_rejected");
-
-        NETTY_QUEUED_BUFFER = metricsContext.getSummary("netty_queued_buffer_capacity", DetailLevel.BASIC);
-
-        DIGEST_MISMATCHES_COUNT = metricsContext.getCounter("digest_mismatches_count");
-
-        LEARNER_REQUEST_PROCESSOR_QUEUE_SIZE = metricsContext.getSummary("learner_request_processor_queue_size", DetailLevel.BASIC);
-
-        UNSUCCESSFUL_HANDSHAKE = metricsContext.getCounter("unsuccessful_handshake");
-        INSECURE_ADMIN = metricsContext.getCounter("insecure_admin_count");
-        TLS_HANDSHAKE_EXCEEDED = metricsContext.getCounter("tls_handshake_exceeded");
-
-        CNXN_CLOSED_WITHOUT_ZK_SERVER_RUNNING = metricsContext.getCounter("cnxn_closed_without_zk_server_running");
-
-        SKIP_LEARNER_REQUEST_TO_NEXT_PROCESSOR_COUNT = metricsContext.getCounter("skip_learner_request_to_next_processor_count");
-
-        SOCKET_CLOSING_TIME = metricsContext.getSummary("socket_closing_time", DetailLevel.BASIC);
-
-        REQUESTS_NOT_FORWARDED_TO_COMMIT_PROCESSOR = metricsContext.getCounter(
-                "requests_not_forwarded_to_commit_processor");
-
-        RESPONSE_BYTES = metricsContext.getCounter("response_bytes");
-        WATCH_BYTES = metricsContext.getCounter("watch_bytes");
-
-        JVM_PAUSE_TIME = metricsContext.getSummary("jvm_pause_time_ms", DetailLevel.ADVANCED);
+        // Also test CreateEmbeddedTimeStamp if tsa URL is available
+        if (tsa == null || tsa.isEmpty())
+        {
+            System.err.println("No TSA URL defined, test skipped");
+            return;
+        }
+        
+        CreateEmbeddedTimeStamp tsaSigning = new CreateEmbeddedTimeStamp(tsa);
+        tsaSigning.embedTimeStamp(new File(OUT_DIR, fileName), new File(OUT_DIR, fileName2));
+        checkSignature(new File(OUT_DIR, fileName), new File(OUT_DIR, fileName2), true);
     }
 
     /**
-     * Txnlog fsync time
+     * Signs a PDF using the "adbe.pkcs7.detached" SubFilter with the SHA-256 digest and a signed
+     * timestamp from a Time Stamping Authority (TSA) server.
+     *
+     * This is not a complete test because we don't have the ability to return a valid response, so
+     * we return a cached response which is well-formed, but does not match the timestamp or nonce
+     * in the request. This allows us to test the basic TSA mechanism and test the nonce, which is a
+     * good start.
+     *
+     * @throws IOException
+     * @throws GeneralSecurityException
+     * @throws CMSException
+     * @throws OperatorCreationException
+     * @throws TSPException
+     * @throws CertificateVerificationException
      */
-    public final Summary FSYNC_TIME;
+    @ParameterizedTest
+	@MethodSource("signingTypes")
+    void testDetachedSHA256WithTSA(boolean externallySign)
+            throws IOException, CMSException, OperatorCreationException, GeneralSecurityException,
+                   TSPException, CertificateVerificationException
+    {
+        // mock TSA response content
+        byte[] content = Files.readAllBytes(Paths.get(IN_DIR, TSA_RESPONSE));
 
-    /**
-     * Snapshot writing time
-     */
-    public final Summary SNAPSHOT_TIME;
+        // mock TSA server (RFC 3161)
+        MockHttpServer mockServer = new MockHttpServer(15371);
+        mockServer.startServer();
+        String brokenMockTSA = "http://localhost:" + mockServer.getServerPort() + "/";
+        MockHttpServer.MockHttpServerResponse response = new MockHttpServer.MockHttpServerResponse();
+        response.setMockResponseContent(content);
+        response.setMockResponseContentType("application/timestamp-reply");
+        response.setMockResponseCode(200);
+        mockServer.setMockHttpServerResponses(response);
 
-    /**
-     * Db init time (snapshot loading + txnlog replay)
-     */
-    public final Summary DB_INIT_TIME;
+        String inPath = IN_DIR + "sign_me_tsa.pdf";
+        String outPath = OUT_DIR + getOutputFileName("signed{0}_tsa.pdf");
 
-    /**
-     * Stats for read request. The timing start from when the server see the
-     * request until it leave final request processor.
-     */
-    public final Summary READ_LATENCY;
+        // sign PDF (will fail due to nonce and timestamp differing)
+        CreateSignature signing1 = new CreateSignature(keyStore, PASSWORD.toCharArray());
+        signing1.setExternalSigning(externallySign);
+        try
+        {
+            signing1.signDetached(new File(inPath), new File(outPath), brokenMockTSA);
+            fail("This should have failed");
+        }
+        catch (IOException e)
+        {
+            assertTrue(e.getCause() instanceof TSPValidationException);
+            new File(outPath).delete();
+        }
 
-    /**
-     * Stats for request that need quorum voting. Timing is the same as read
-     * request. We only keep track of stats for request that originated from
-     * this machine only.
-     */
-    public final Summary UPDATE_LATENCY;
+        mockServer.stopServer();
 
-    /**
-     * Stats for all quorum request. The timing start from when the leader see
-     * the request until it reach the learner.
-     */
-    public final Summary PROPAGATION_LATENCY;
+        if (tsa == null || tsa.isEmpty())
+        {
+            System.err.println("No TSA URL defined, test skipped");
+            return;
+        }
 
-    public final Summary FOLLOWER_SYNC_TIME;
-
-    public final Summary ELECTION_TIME;
-
-    public final Counter LOOKING_COUNT;
-    public final Counter DIFF_COUNT;
-    public final Counter SNAP_COUNT;
-    public final Counter COMMIT_COUNT;
-    public final Counter CONNECTION_REQUEST_COUNT;
-
-    public final Counter REVALIDATE_COUNT;
-    public final Counter CONNECTION_DROP_COUNT;
-    public final Counter CONNECTION_REVALIDATE_COUNT;
-
-    // Expiry queue stats
-    public final Counter SESSIONLESS_CONNECTIONS_EXPIRED;
-    public final Counter STALE_SESSIONS_EXPIRED;
-
-    // Connection throttling related
-    public final Summary CONNECTION_TOKEN_DEFICIT;
-    public final Counter CONNECTION_REJECTED;
-
-    public final Summary INFLIGHT_SNAP_COUNT;
-    public final Summary INFLIGHT_DIFF_COUNT;
-
-    public final Counter UNRECOVERABLE_ERROR_COUNT;
-    public final SummarySet WRITE_PER_NAMESPACE;
-    public final SummarySet READ_PER_NAMESPACE;
-    public final Counter BYTES_RECEIVED_COUNT;
-
-    public final Summary PREP_PROCESSOR_QUEUE_TIME;
-    public final Summary PREP_PROCESSOR_QUEUE_SIZE;
-    public final Counter PREP_PROCESSOR_QUEUED;
-    public final Counter OUTSTANDING_CHANGES_QUEUED;
-    public final Counter OUTSTANDING_CHANGES_REMOVED;
-    public final Summary PREP_PROCESS_TIME;
-    public final Summary PROPOSAL_PROCESS_TIME;
-    public final Summary CLOSE_SESSION_PREP_TIME;
-
-    public final Summary PROPOSAL_LATENCY;
-    public final Summary PROPOSAL_ACK_CREATION_LATENCY;
-    public final Summary COMMIT_PROPAGATION_LATENCY;
-    public final Counter LEARNER_PROPOSAL_RECEIVED_COUNT;
-    public final Counter LEARNER_COMMIT_RECEIVED_COUNT;
-
-    public final Summary STARTUP_TXNS_LOADED;
-    public final Summary STARTUP_TXNS_LOAD_TIME;
-    public final Summary STARTUP_SNAP_LOAD_TIME;
-
-    public final Summary SYNC_PROCESSOR_QUEUE_AND_FLUSH_TIME;
-    public final Summary SYNC_PROCESSOR_QUEUE_SIZE;
-    public final Counter SYNC_PROCESSOR_QUEUED;
-    public final Summary SYNC_PROCESSOR_QUEUE_TIME;
-    public final Summary SYNC_PROCESSOR_FLUSH_TIME;
-    public final Summary SYNC_PROCESS_TIME;
-
-    public final Summary BATCH_SIZE;
-
-    public final Summary QUORUM_ACK_LATENCY;
-    public final SummarySet ACK_LATENCY;
-    public final Counter PROPOSAL_COUNT;
-    public final Counter QUIT_LEADING_DUE_TO_DISLOYAL_VOTER;
-
-    /**
-     * Fired watcher stats.
-     */
-    public final Summary NODE_CREATED_WATCHER;
-    public final Summary NODE_DELETED_WATCHER;
-    public final Summary NODE_CHANGED_WATCHER;
-    public final Summary NODE_CHILDREN_WATCHER;
-
-    /*
-     * Number of dead watchers in DeadWatcherListener
-     */
-    public final Counter ADD_DEAD_WATCHER_STALL_TIME;
-    public final Counter DEAD_WATCHERS_QUEUED;
-    public final Counter DEAD_WATCHERS_CLEARED;
-    public final Summary DEAD_WATCHERS_CLEANER_LATENCY;
-
-    /*
-     * Response cache hit and miss metrics.
-     */
-    public final Counter RESPONSE_PACKET_CACHE_HITS;
-    public final Counter RESPONSE_PACKET_CACHE_MISSING;
-    public final Counter RESPONSE_PACKET_GET_CHILDREN_CACHE_HITS;
-    public final Counter RESPONSE_PACKET_GET_CHILDREN_CACHE_MISSING;
-
-    /**
-     * Learner handler quorum packet metrics.
-     */
-    public final SummarySet LEARNER_HANDLER_QP_SIZE;
-    public final SummarySet LEARNER_HANDLER_QP_TIME;
-
-    /*
-     * Number of requests that are in the session queue.
-     */
-    public final Summary REQUESTS_IN_SESSION_QUEUE;
-    public final Summary PENDING_SESSION_QUEUE_SIZE;
-    /*
-     * Consecutive number of read requests that are in the session queue right after a commit request.
-     */
-    public final Summary READS_AFTER_WRITE_IN_SESSION_QUEUE;
-    public final Summary READ_ISSUED_FROM_SESSION_QUEUE;
-    public final Summary SESSION_QUEUES_DRAINED;
-
-    public final Summary TIME_WAITING_EMPTY_POOL_IN_COMMIT_PROCESSOR_READ;
-    public final Summary WRITE_BATCH_TIME_IN_COMMIT_PROCESSOR;
-
-    public final Summary CONCURRENT_REQUEST_PROCESSING_IN_COMMIT_PROCESSOR;
-
-    public final Summary READS_QUEUED_IN_COMMIT_PROCESSOR;
-    public final Summary WRITES_QUEUED_IN_COMMIT_PROCESSOR;
-    public final Summary COMMITS_QUEUED_IN_COMMIT_PROCESSOR;
-    public final Counter COMMITS_QUEUED;
-    public final Summary READS_ISSUED_IN_COMMIT_PROC;
-    public final Summary WRITES_ISSUED_IN_COMMIT_PROC;
-
-    // Request op throttling related
-    public final Counter THROTTLED_OPS;
-
-    /**
-     * Time spent by a read request in the commit processor.
-     */
-    public final Summary READ_COMMITPROC_TIME;
-
-    /**
-     * Time spent by a write request in the commit processor.
-     */
-    public final Summary WRITE_COMMITPROC_TIME;
-
-    /**
-     * Time spent by a committed request, for a locally issued write, in the
-     * commit processor.
-     */
-    public final Summary LOCAL_WRITE_COMMITTED_TIME;
-
-    /**
-     * Time spent by a committed request for a write, issued by other server, in the
-     * commit processor.
-     */
-    public final Summary SERVER_WRITE_COMMITTED_TIME;
-
-    public final Summary COMMIT_PROCESS_TIME;
-
-    /**
-     * Observer Master processing metrics.
-     */
-    public final Summary OM_PROPOSAL_PROCESS_TIME;
-    public final Summary OM_COMMIT_PROCESS_TIME;
-
-    /**
-     * Time spent by the final processor. This is tracked in the commit processor.
-     */
-    public final Summary READ_FINAL_PROC_TIME;
-    public final Summary WRITE_FINAL_PROC_TIME;
-
-    /*
-     * Number of successful matches of expected ensemble name in EnsembleAuthenticationProvider.
-     */
-    public final Counter ENSEMBLE_AUTH_SUCCESS;
-
-    /*
-     * Number of unsuccessful matches of expected ensemble name in EnsembleAuthenticationProvider.
-     */
-    public final Counter ENSEMBLE_AUTH_FAIL;
-
-    /*
-     * Number of client auth requests with no ensemble set in EnsembleAuthenticationProvider.
-     */
-    public final Counter ENSEMBLE_AUTH_SKIP;
-
-    public final Counter STALE_REQUESTS;
-    public final Counter STALE_REQUESTS_DROPPED;
-    public final Counter STALE_REPLIES;
-    public final Summary REQUEST_THROTTLE_QUEUE_TIME;
-    public final Counter REQUEST_THROTTLE_WAIT_COUNT;
-    public final Counter LARGE_REQUESTS_REJECTED;
-
-    public final Summary NETTY_QUEUED_BUFFER;
-
-    // Total number of digest mismatches that are observed when applying
-    // txns to data tree.
-    public final Counter DIGEST_MISMATCHES_COUNT;
-
-    public final Summary LEARNER_REQUEST_PROCESSOR_QUEUE_SIZE;
-
-    public final Counter UNSUCCESSFUL_HANDSHAKE;
-
-    /*
-     * Number of insecure connections to admin port
-     */
-    public final Counter INSECURE_ADMIN;
-
-    public final Counter TLS_HANDSHAKE_EXCEEDED;
-
-    public final Counter CNXN_CLOSED_WITHOUT_ZK_SERVER_RUNNING;
-
-    public final Counter SKIP_LEARNER_REQUEST_TO_NEXT_PROCESSOR_COUNT;
-
-    public final Summary SOCKET_CLOSING_TIME;
-
-    public final Counter REQUESTS_NOT_FORWARDED_TO_COMMIT_PROCESSOR;
-
-    /**
-     *  Number of response/watch bytes written to clients.
-     */
-    public final Counter RESPONSE_BYTES;
-    public final Counter WATCH_BYTES;
-
-    public final Summary JVM_PAUSE_TIME;
-
-    private final MetricsProvider metricsProvider;
-
-    public void resetAll() {
-        metricsProvider.resetAllValues();
+        CreateSignature signing2 = new CreateSignature(keyStore, PASSWORD.toCharArray());
+        signing2.setExternalSigning(externallySign);
+        signing2.signDetached(new File(inPath), new File(outPath), tsa);
+        checkSignature(new File(inPath), new File(outPath), true);
+        System.out.println("TSA test successful");
     }
 
-    public MetricsProvider getMetricsProvider() {
-        return metricsProvider;
+    /**
+     * Test timestamp only signature (ETSI.RFC3161).
+     * 
+     * @throws IOException
+     * @throws CMSException
+     * @throws OperatorCreationException
+     * @throws GeneralSecurityException
+     * @throws TSPException
+     * @throws CertificateVerificationException 
+     */
+    @ParameterizedTest
+	@MethodSource("signingTypes")
+    void testCreateSignedTimeStamp(boolean externallySign)
+            throws IOException, CMSException, OperatorCreationException, GeneralSecurityException,
+                   TSPException, CertificateVerificationException
+    {
+        if (externallySign)
+        {
+            return; // runs only once, independent of externallySign
+        }
+        if (tsa == null || tsa.isEmpty())
+        {
+            System.err.println("No TSA URL defined, test skipped");
+            return;
+        }
+        final String fileName = getOutputFileName("timestamped{0}.pdf");
+        CreateSignedTimeStamp signing = new CreateSignedTimeStamp(tsa);
+        signing.signDetached(new File(IN_DIR + "sign_me.pdf"), new File(OUT_DIR + fileName));
+
+        try (PDDocument doc = Loader.loadPDF(new File(OUT_DIR + fileName)))
+        {
+            PDSignature signature = doc.getLastSignatureDictionary();
+            byte[] totalFileContent = Files.readAllBytes(new File(OUT_DIR, fileName).toPath());
+            byte[] signedFileContent = signature.getSignedContent(totalFileContent);
+            byte[] contents = signature.getContents();
+            TimeStampToken timeStampToken = new TimeStampToken(new CMSSignedData(contents));
+            ByteArrayInputStream certStream = new ByteArrayInputStream(contents);
+            Collection<? extends Certificate> certs = certificateFactory.generateCertificates(certStream);
+
+            String hashAlgorithm = timeStampToken.getTimeStampInfo().getMessageImprintAlgOID().getId();
+            // compare the hash of the signed content with the hash in the timestamp
+            assertArrayEquals(MessageDigest.getInstance(hashAlgorithm).digest(signedFileContent),
+                    timeStampToken.getTimeStampInfo().getMessageImprintDigest());
+
+            X509Certificate certFromTimeStamp = (X509Certificate) certs.iterator().next();
+            SigUtils.checkTimeStampCertificateUsage(certFromTimeStamp);
+            SigUtils.validateTimestampToken(timeStampToken);
+            SigUtils.verifyCertificateChain(timeStampToken.getCertificates(),
+                    certFromTimeStamp,
+                    timeStampToken.getTimeStampInfo().getGenTime());
+        }
     }
 
+    /**
+     * Test creating visual signature.
+     *
+     * @throws IOException
+     * @throws CMSException
+     * @throws OperatorCreationException
+     * @throws GeneralSecurityException
+     * @throws TSPException
+     * @throws CertificateVerificationException
+     */
+    @ParameterizedTest
+	@MethodSource("signingTypes")
+    void testCreateVisibleSignature(boolean externallySign)
+            throws IOException, CMSException, OperatorCreationException, GeneralSecurityException,
+                   TSPException, CertificateVerificationException
+    {
+        // sign PDF
+        String inPath = IN_DIR + "sign_me_visible.pdf";
+        File destFile;
+        try (FileInputStream fis = new FileInputStream(JPEG_PATH))
+        {
+            CreateVisibleSignature signing = new CreateVisibleSignature(keyStore, PASSWORD.toCharArray());
+            signing.setVisibleSignDesigner(inPath, 0, 0, -50, fis, 1);
+            signing.setVisibleSignatureProperties("name", "location", "Security", 0, 1, true);
+            signing.setExternalSigning(externallySign);
+            destFile = new File(OUT_DIR + getOutputFileName("signed{0}_visible.pdf"));
+            signing.signPDF(new File(inPath), destFile, null);
+        }
+
+        checkSignature(new File(inPath), destFile, false);
+    }
+
+    /**
+     * Test creating visual signature with the modernized example.
+     *
+     * @throws IOException
+     * @throws CMSException
+     * @throws OperatorCreationException
+     * @throws GeneralSecurityException
+     * @throws TSPException
+     * @throws CertificateVerificationException
+     */
+    @ParameterizedTest
+	@MethodSource("signingTypes")
+    void testCreateVisibleSignature2(boolean externallySign)
+            throws IOException, CMSException, OperatorCreationException, GeneralSecurityException,
+                   TSPException, CertificateVerificationException
+    {
+        // sign PDF
+        String inPath = IN_DIR + "sign_me_visible.pdf";
+        File destFile;
+
+        CreateVisibleSignature2 signing = new CreateVisibleSignature2(keyStore, PASSWORD.toCharArray());
+        Rectangle2D humanRect = new Rectangle2D.Float(100, 200, 150, 50);
+        signing.setImageFile(new File(JPEG_PATH));
+        signing.setExternalSigning(externallySign);
+        destFile = new File(OUT_DIR + getOutputFileName("signed{0}_visible2.pdf"));
+        signing.signPDF(new File(inPath), destFile, humanRect, null);
+
+        checkSignature(new File(inPath), destFile, false);
+    }
+
+    /**
+     * Test when visually signing externally on an existing signature field on a file which has
+     * been signed before.
+     * 
+     * @throws IOException
+     * @throws NoSuchAlgorithmException
+     * @throws CertificateException
+     * @throws UnrecoverableKeyException
+     * @throws CMSException
+     * @throws OperatorCreationException
+     * @throws GeneralSecurityException
+     * @throws TSPException
+     * @throws CertificateVerificationException
+     */
+    @ParameterizedTest
+	@MethodSource("signingTypes")
+    void testPDFBox3978(boolean externallySign) throws IOException, NoSuchAlgorithmException, 
+                                        CertificateException, UnrecoverableKeyException, 
+                                        CMSException, OperatorCreationException, GeneralSecurityException,
+                                        TSPException, CertificateVerificationException
+    {
+        String filename        = OUT_DIR + "EmptySignatureForm.pdf";
+        String filenameSigned1 = OUT_DIR + "EmptySignatureForm-signed1.pdf";
+        String filenameSigned2 = OUT_DIR + "EmptySignatureForm-signed2.pdf";
+
+        if (!externallySign)
+        {
+            return;
+        }
+
+        // create file with empty signature
+        CreateEmptySignatureForm.main(new String[]{filename});
+
+        // sign PDF
+        CreateSignature signing1 = new CreateSignature(keyStore, PASSWORD.toCharArray());
+        signing1.setExternalSigning(false);
+        signing1.signDetached(new File(filename), new File(filenameSigned1));
+
+        checkSignature(new File(filename), new File(filenameSigned1), false);
+
+        try (PDDocument doc1 = Loader.loadPDF(new File(filenameSigned1)))
+        {
+            List<PDSignature> signatureDictionaries = doc1.getSignatureDictionaries();
+            assertEquals(1, signatureDictionaries.size());
+        }
+
+        // do visual signing in the field
+        try (FileInputStream fis = new FileInputStream(JPEG_PATH))
+        {
+            CreateVisibleSignature signing2 = new CreateVisibleSignature(keyStore, PASSWORD.toCharArray());
+            signing2.setVisibleSignDesigner(filenameSigned1, 0, 0, -50, fis, 1);
+            signing2.setVisibleSignatureProperties("name", "location", "Security", 0, 1, true);
+            signing2.setExternalSigning(true);
+            signing2.signPDF(new File(filenameSigned1), new File(filenameSigned2), null, "Signature1");
+        }
+
+        checkSignature(new File(filenameSigned1), new File(filenameSigned2), false);
+
+        try (PDDocument doc2 = Loader.loadPDF(new File(filenameSigned2)))
+        {
+            List<PDSignature> signatureDictionaries = doc2.getSignatureDictionaries();
+            assertEquals(2, signatureDictionaries.size());
+        }
+    }
+
+    private String getOutputFileName(String filePattern)
+    {
+        return MessageFormat.format(filePattern,(externallySign ? "_ext" : ""));
+    }
+
+    // This check fails with a file created with the code before PDFBOX-3011 was solved.
+    private void checkSignature(File origFile, File signedFile, boolean checkTimeStamp)
+            throws IOException, CMSException, OperatorCreationException, GeneralSecurityException,
+            TSPException, CertificateVerificationException
+    {
+        String origPageKey;
+        try (PDDocument document = Loader.loadPDF(origFile))
+        {
+            // get string representation of pages COSObject
+            origPageKey = document.getDocumentCatalog().getCOSObject().getItem(COSName.PAGES).toString();
+        }
+        try (PDDocument document = Loader.loadPDF(signedFile))
+        {
+            // PDFBOX-4261: check that object number stays the same 
+            assertEquals(origPageKey, document.getDocumentCatalog().getCOSObject().getItem(COSName.PAGES).toString());
+
+            List<PDSignature> signatureDictionaries = document.getSignatureDictionaries();
+            if (signatureDictionaries.isEmpty())
+            {
+                fail("no signature found");
+            }
+            for (PDSignature sig : document.getSignatureDictionaries())
+            {
+                byte[] contents = sig.getContents();
+
+                // verify that getSignedContent() brings the same content
+                // regardless whether from an InputStream or from a byte array
+                byte[] totalFileContent = Files.readAllBytes(signedFile.toPath());
+                byte[] signedFileContent1 = sig.getSignedContent(new ByteArrayInputStream(totalFileContent));
+                byte[] signedFileContent2 = sig.getSignedContent(totalFileContent);
+                assertArrayEquals(signedFileContent1, signedFileContent2);
+
+                // verify that all getContents() methods returns the same content
+                try (FileInputStream fis = new FileInputStream(signedFile))
+                {
+                    byte[] contents2 = sig.getContents(IOUtils.toByteArray(fis));
+                    assertArrayEquals(contents, contents2);
+                }
+                byte[] contents3 = sig.getContents(new FileInputStream(signedFile));
+                assertArrayEquals(contents, contents3);
+
+                // inspiration:
+                // http://stackoverflow.com/a/26702631/535646
+                // http://stackoverflow.com/a/9261365/535646
+                CMSSignedData signedData = new CMSSignedData(new CMSProcessableByteArray(signedFileContent1), contents);
+                Store<X509CertificateHolder> certificatesStore = signedData.getCertificates();
+                Collection<SignerInformation> signers = signedData.getSignerInfos().getSigners();
+                SignerInformation signerInformation = signers.iterator().next();
+                @SuppressWarnings("unchecked")
+                Collection<X509CertificateHolder> matches = certificatesStore
+                        .getMatches((Selector<X509CertificateHolder>) signerInformation.getSID());
+                X509CertificateHolder certificateHolder = matches.iterator().next();
+                assertArrayEquals(certificate.getEncoded(), certificateHolder.getEncoded());
+                // CMSVerifierCertificateNotValidException means that the keystore wasn't valid at signing time
+                if (!signerInformation.verify(new JcaSimpleSignerInfoVerifierBuilder().build(certificateHolder)))
+                {
+                    fail("Signature verification failed");
+                }
+
+                TimeStampToken timeStampToken = SigUtils.extractTimeStampTokenFromSignerInformation(signerInformation);
+                if (checkTimeStamp)
+                {
+                    assertNotNull(timeStampToken);
+                    SigUtils.validateTimestampToken(timeStampToken);
+
+                    TimeStampTokenInfo timeStampInfo = timeStampToken.getTimeStampInfo();
+
+                    // compare the hash of the signed content with the hash in the timestamp
+                    byte[] tsMessageImprintDigest = timeStampInfo.getMessageImprintDigest();
+                    String hashAlgorithm = timeStampInfo.getMessageImprintAlgOID().getId();
+                    byte[] sigMessageImprintDigest = MessageDigest.getInstance(hashAlgorithm).digest(signerInformation.getSignature());
+                    assertArrayEquals(sigMessageImprintDigest, tsMessageImprintDigest, "timestamp signature verification failed");                    
+
+                    Store<X509CertificateHolder> tsCertStore = timeStampToken.getCertificates();
+
+                    // get the certificate from the timeStampToken
+                    @SuppressWarnings("unchecked") // TimeStampToken.getSID() is untyped
+                    Collection<X509CertificateHolder> tsCertStoreMatches = tsCertStore.getMatches(timeStampToken.getSID());
+                    X509CertificateHolder certHolderFromTimeStamp = tsCertStoreMatches.iterator().next();
+                    X509Certificate certFromTimeStamp = new JcaX509CertificateConverter().getCertificate(certHolderFromTimeStamp);
+
+                    SigUtils.checkTimeStampCertificateUsage(certFromTimeStamp);
+                    SigUtils.verifyCertificateChain(tsCertStore, certFromTimeStamp, timeStampInfo.getGenTime());
+                }
+                else
+                {
+                    assertNull(timeStampToken);
+                }
+            }
+        }
+    }
+
+    private String calculateDigestString(InputStream inputStream) throws NoSuchAlgorithmException, IOException
+    {
+        MessageDigest md = MessageDigest.getInstance("SHA-256");
+        return Hex.getString(md.digest(IOUtils.toByteArray(inputStream)));
+    }
+
+    /**
+     * PDFBOX-3811: make sure that calling saveIncrementalForExternalSigning() more than once
+     * brings the same result.
+     * 
+     * @throws IOException
+     * @throws NoSuchAlgorithmException 
+     */
+    @ParameterizedTest
+	@MethodSource("signingTypes")
+    void testPDFBox3811(boolean externallySign) throws IOException, NoSuchAlgorithmException
+    {
+        if (!externallySign)
+        {
+            return;
+        }
+        
+        // create simple PDF
+        PDDocument document = new PDDocument();
+        PDPage page = new PDPage();
+        document.addPage(page);
+        new PDPageContentStream(document, page).close();
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        document.save(baos);
+        document.close();
+        
+        document = Loader.loadPDF(baos.toByteArray());
+        // for stable digest
+        document.setDocumentId(12345L);
+        
+        PDSignature signature = new PDSignature();
+        signature.setFilter(PDSignature.FILTER_ADOBE_PPKLITE);
+        signature.setSubFilter(PDSignature.SUBFILTER_ADBE_PKCS7_DETACHED);
+        document.addSignature(signature);
+        int[] reserveByteRange = signature.getByteRange();
+
+        String digestString = calculateDigestString(document.saveIncrementalForExternalSigning(new ByteArrayOutputStream()).getContent());
+        boolean caught = false;
+        try
+        {
+            document.saveIncrementalForExternalSigning(new ByteArrayOutputStream());
+        }
+        catch (IllegalStateException ex)
+        {
+            caught = true;
+        }
+        assertTrue(caught, "IllegalStateException should have been thrown");
+        signature.setByteRange(reserveByteRange);
+        assertEquals(digestString, calculateDigestString(document.saveIncrementalForExternalSigning(new ByteArrayOutputStream()).getContent()));
+    }
+
+    /**
+     * Create a simple form PDF, sign it, reload it, change a field value, incrementally save it.
+     * This should not break the signature, and the value and its display must have changed as
+     * expected. Do this both for the old and new incremental save methods.
+     *
+     * @throws Exception
+     */
+    @ParameterizedTest
+	@MethodSource("signingTypes")
+    void testSaveIncrementalAfterSign(boolean externallySign) throws Exception
+    {
+        BufferedImage oldImage, expectedImage1, actualImage1, expectedImage2, actualImage2;
+
+        CreateSimpleForm.main(new String[0]); // creates "target/SimpleForm.pdf"
+
+        // sign PDF
+        CreateSignature signing = new CreateSignature(keyStore, PASSWORD.toCharArray());
+        signing.setExternalSigning(externallySign);
+
+        final String fileNameSigned = getOutputFileName("SimpleForm_signed{0}.pdf");
+        final String fileNameResaved1 = getOutputFileName("SimpleForm_signed{0}_incrementallyresaved1.pdf");
+        final String fileNameResaved2 = getOutputFileName("SimpleForm_signed{0}_incrementallyresaved2.pdf");
+        signing.signDetached(new File("target/SimpleForm.pdf"), new File(OUT_DIR + fileNameSigned));
+
+        checkSignature(new File("target/SimpleForm.pdf"), new File(OUT_DIR, fileNameSigned), false);
+        
+        try (PDDocument doc = Loader.loadPDF(new File(OUT_DIR, fileNameSigned)))
+        {
+            oldImage = new PDFRenderer(doc).renderImage(0);
+            
+            FileOutputStream fileOutputStream = new FileOutputStream(new File(OUT_DIR, fileNameResaved1));
+            PDField field = doc.getDocumentCatalog().getAcroForm().getField("SampleField");
+            field.setValue("New Value 1");
+
+            // Test of PDFBOX-4509: only "Helv" font should be there
+            Collection<COSName> fonts = (Collection<COSName>) field.getWidgets().get(0).getAppearance().
+                    getNormalAppearance().getAppearanceStream().getResources().getFontNames();
+            assertTrue(fonts.contains(COSName.HELV));
+            assertEquals(1, fonts.size());
+
+            expectedImage1 = new PDFRenderer(doc).renderImage(0);
+
+            // compare images, image must has changed
+            assertEquals(oldImage.getWidth(), expectedImage1.getWidth());
+            assertEquals(oldImage.getHeight(), expectedImage1.getHeight());
+            assertEquals(oldImage.getType(), expectedImage1.getType());
+            DataBufferInt expectedData = (DataBufferInt) oldImage.getRaster().getDataBuffer();
+            DataBufferInt actualData = (DataBufferInt) expectedImage1.getRaster().getDataBuffer();
+            assertEquals(expectedData.getData().length, actualData.getData().length);
+            assertFalse(Arrays.equals(expectedData.getData(), actualData.getData()));
+
+            // old style incremental save: create a "path" from the root to the objects that need an update
+            doc.getDocumentCatalog().getCOSObject().setNeedToBeUpdated(true);
+            doc.getDocumentCatalog().getAcroForm().getCOSObject().setNeedToBeUpdated(true);
+            field.getCOSObject().setNeedToBeUpdated(true);
+            PDAppearanceDictionary appearance = field.getWidgets().get(0).getAppearance();
+            appearance.getCOSObject().setNeedToBeUpdated(true);
+            appearance.getNormalAppearance().getCOSObject().setNeedToBeUpdated(true);
+            doc.saveIncremental(fileOutputStream);
+        }
+        checkSignature(new File("target/SimpleForm.pdf"), new File(OUT_DIR, fileNameResaved1), false);
+        try (PDDocument doc = Loader.loadPDF(new File(OUT_DIR, fileNameResaved1)))
+        {
+            PDField field = doc.getDocumentCatalog().getAcroForm().getField("SampleField");
+            assertEquals("New Value 1", field.getValueAsString());
+            actualImage1 = new PDFRenderer(doc).renderImage(0);
+            // compare images, equality proves that the appearance has been updated too
+            assertEquals(expectedImage1.getWidth(), actualImage1.getWidth());
+            assertEquals(expectedImage1.getHeight(), actualImage1.getHeight());
+            assertEquals(expectedImage1.getType(), actualImage1.getType());
+            DataBufferInt expectedData = (DataBufferInt) expectedImage1.getRaster().getDataBuffer();
+            DataBufferInt actualData = (DataBufferInt) actualImage1.getRaster().getDataBuffer();
+            assertArrayEquals(expectedData.getData(), actualData.getData());
+        }
+
+        try (PDDocument doc = Loader.loadPDF(new File(OUT_DIR, fileNameSigned)))
+        {
+            FileOutputStream fileOutputStream = new FileOutputStream(new File(OUT_DIR, fileNameResaved2));
+            PDField field = doc.getDocumentCatalog().getAcroForm().getField("SampleField");
+            field.setValue("New Value 2");
+            expectedImage2 = new PDFRenderer(doc).renderImage(0);
+
+            // compare images, image must has changed
+            assertEquals(oldImage.getWidth(), expectedImage2.getWidth());
+            assertEquals(oldImage.getHeight(), expectedImage2.getHeight());
+            assertEquals(oldImage.getType(), expectedImage2.getType());
+            DataBufferInt expectedData = (DataBufferInt) oldImage.getRaster().getDataBuffer();
+            DataBufferInt actualData = (DataBufferInt) expectedImage2.getRaster().getDataBuffer();
+            assertEquals(expectedData.getData().length, actualData.getData().length);
+            assertFalse(Arrays.equals(expectedData.getData(), actualData.getData()));
+
+            // new style incremental save: add only the objects that have changed
+            Set<COSDictionary> objectsToWrite = new HashSet<>();
+            objectsToWrite.add(field.getCOSObject());
+            objectsToWrite.add(field.getWidgets().get(0).getAppearance().getCOSObject());
+            objectsToWrite.add(field.getWidgets().get(0).getAppearance().getNormalAppearance().getCOSObject());
+            doc.saveIncremental(fileOutputStream, objectsToWrite);
+        }
+        checkSignature(new File("target/SimpleForm.pdf"), new File(OUT_DIR, fileNameResaved2), false);
+        try (PDDocument doc = Loader.loadPDF(new File(OUT_DIR, fileNameResaved2)))
+        {
+            PDField field = doc.getDocumentCatalog().getAcroForm().getField("SampleField");
+            assertEquals("New Value 2", field.getValueAsString());
+            actualImage2 = new PDFRenderer(doc).renderImage(0);
+            // compare images, equality proves that the appearance has been updated too
+            assertEquals(expectedImage2.getWidth(), actualImage2.getWidth());
+            assertEquals(expectedImage2.getHeight(), actualImage2.getHeight());
+            assertEquals(expectedImage2.getType(), actualImage2.getType());
+            DataBufferInt expectedData = (DataBufferInt) expectedImage2.getRaster().getDataBuffer();
+            DataBufferInt actualData = (DataBufferInt) actualImage2.getRaster().getDataBuffer();
+            assertArrayEquals(expectedData.getData(), actualData.getData());
+        }
+    }
+
+    @ParameterizedTest
+	@MethodSource("signingTypes")
+    void testPDFBox4784(boolean externallySign) throws Exception
+    {
+        if (!externallySign)
+        {
+            return;
+        }
+        Date signingTime = new Date();
+
+        byte[] defaultSignedOne = signEncrypted(null, signingTime);
+        byte[] defaultSignedTwo = signEncrypted(null, signingTime);
+        assertFalse(Arrays.equals(defaultSignedOne, defaultSignedTwo));
+
+        // a dummy value for FixedSecureRandom is used (for real use-cases a secure value should be provided)
+        byte[] fixedRandomSignedOne = signEncrypted(new FixedSecureRandom(new byte[128]),
+                signingTime);
+        byte[] fixedRandomSignedTwo = signEncrypted(new FixedSecureRandom(new byte[128]),
+                signingTime);
+        assertArrayEquals(fixedRandomSignedOne, fixedRandomSignedTwo);
+    }
+
+    /**
+     * Test getting CRLs when OCSP (adobe-ocsp.geotrust.com) is unavailable.
+     * This validates the certificates of the signature from the file 083698.pdf, which is 
+     * 109TH CONGRESS 2D SESSION H. R. 5500, from MAY 25, 2006.
+     *
+     * @throws IOException
+     * @throws CMSException
+     * @throws CertificateException
+     * @throws TSPException
+     * @throws OperatorCreationException
+     * @throws CertificateVerificationException
+     * @throws NoSuchAlgorithmException 
+     */
+    @ParameterizedTest
+	@MethodSource("signingTypes")
+    void testCRL(boolean externallySign) throws IOException, CMSException, CertificateException, TSPException,
+            OperatorCreationException, CertificateVerificationException, NoSuchAlgorithmException
+    {
+        if (externallySign)
+        {
+            return; // runs only once, independent of externallySign
+        }
+        String hexSignature;
+        try (BufferedReader bfr = 
+            new BufferedReader(new InputStreamReader(new FileInputStream(IN_DIR + "hexsignature.txt"))))
+        {
+            hexSignature = bfr.readLine();
+        }
+
+        CMSSignedData signedData = new CMSSignedData(Hex.decodeHex(hexSignature));
+        Collection<SignerInformation> signers = signedData.getSignerInfos().getSigners();
+        SignerInformation signerInformation = signers.iterator().next();
+        Store<X509CertificateHolder> certificatesStore = signedData.getCertificates();
+        @SuppressWarnings("unchecked") // SignerInformation.getSID() is untyped
+        Collection<X509CertificateHolder> matches = certificatesStore.getMatches(signerInformation.getSID());
+        X509CertificateHolder certificateHolder = matches.iterator().next();
+        X509Certificate certFromSignedData = new JcaX509CertificateConverter().getCertificate(certificateHolder);
+        SigUtils.checkCertificateUsage(certFromSignedData);
+
+        TimeStampToken timeStampToken = SigUtils.extractTimeStampTokenFromSignerInformation(signerInformation);
+        SigUtils.validateTimestampToken(timeStampToken);
+        @SuppressWarnings("unchecked") // TimeStampToken.getSID() is untyped
+        Collection<X509CertificateHolder> tstMatches =
+            timeStampToken.getCertificates().getMatches((Selector<X509CertificateHolder>) timeStampToken.getSID());
+        X509CertificateHolder tstCertHolder = tstMatches.iterator().next();
+        X509Certificate certFromTimeStamp = new JcaX509CertificateConverter().getCertificate(tstCertHolder);
+        // merge both stores using a set to remove duplicates
+        HashSet<X509CertificateHolder> certificateHolderSet = new HashSet<>();
+        certificateHolderSet.addAll(certificatesStore.getMatches(null));
+        certificateHolderSet.addAll(timeStampToken.getCertificates().getMatches(null));
+        SigUtils.verifyCertificateChain(new CollectionStore<>(certificateHolderSet),
+                certFromTimeStamp,
+                timeStampToken.getTimeStampInfo().getGenTime());
+        SigUtils.checkTimeStampCertificateUsage(certFromTimeStamp);
+
+        // compare the hash of the signature with the hash in the timestamp
+        byte[] tsMessageImprintDigest = timeStampToken.getTimeStampInfo().getMessageImprintDigest();
+        String hashAlgorithm = timeStampToken.getTimeStampInfo().getMessageImprintAlgOID().getId();
+        byte[] sigMessageImprintDigest = MessageDigest.getInstance(hashAlgorithm).digest(signerInformation.getSignature());
+        assertArrayEquals(tsMessageImprintDigest, sigMessageImprintDigest);
+
+        certFromSignedData.checkValidity(timeStampToken.getTimeStampInfo().getGenTime());
+        SigUtils.verifyCertificateChain(certificatesStore, certFromSignedData, timeStampToken.getTimeStampInfo().getGenTime());
+    }
+
+    /**
+     * Test adding LTV information. This tests the status quo. If we use a new file (or if the file
+     * gets updated) then the test may have to be adjusted. The test is not really perfect, but it
+     * tries to check a minimum of things that should match. If the test fails and you didn't change
+     * anything in signing, then find out whether some external servers involved are unresponsive.
+     * At the time of writing this, the OCSP server http://ocsp.quovadisglobal.com responds with 502
+     * "UNAUTHORIZED". That is not a problem as long as the CRL URL works.
+     *
+     * @throws java.io.IOException
+     * @throws java.security.GeneralSecurityException
+     * @throws org.bouncycastle.cert.ocsp.OCSPException
+     * @throws org.bouncycastle.operator.OperatorCreationException
+     * @throws org.bouncycastle.cms.CMSException
+     */
+    @ParameterizedTest
+	@MethodSource("signingTypes")
+    void testAddValidationInformation(boolean externallySign)
+            throws IOException, GeneralSecurityException, OCSPException, OperatorCreationException, CMSException
+    {
+        if (externallySign)
+        {
+            return; // runs only once, independent of externallySign
+        }
+        File inFile = new File("target/pdfs", "notCertified_368835_Sig_en_201026090509.pdf");
+        String name = inFile.getName();
+        String substring = name.substring(0, name.lastIndexOf('.'));
+
+        File outFile = new File(OUT_DIR, substring + "_LTV.pdf");
+        AddValidationInformation addValidationInformation = new AddValidationInformation();
+        addValidationInformation.validateSignature(inFile, outFile);
+
+        try (PDDocument doc = Loader.loadPDF(outFile))
+        {
+            PDSignature signature = doc.getLastSignatureDictionary();
+            byte[] contents = signature.getContents();
+            PDDocumentCatalog docCatalog = doc.getDocumentCatalog();
+            COSDictionary dssDict = docCatalog.getCOSObject().getCOSDictionary(COSName.getPDFName("DSS"));
+            COSArray dssCertArray = dssDict.getCOSArray(COSName.getPDFName("Certs"));
+            COSDictionary vriDict = dssDict.getCOSDictionary(COSName.getPDFName("VRI"));
+            // Check that all known signature certificates are in the VRI/signaturehash/Cert array
+            byte[] signatureHash = MessageDigest.getInstance("SHA-1").digest(contents);
+            String hexSignatureHash = Hex.getString(signatureHash);
+            System.out.println("hexSignatureHash: " + hexSignatureHash);
+            CMSSignedData signedData = new CMSSignedData(contents);
+            Store<X509CertificateHolder> certificatesStore = signedData.getCertificates();
+            HashSet<X509CertificateHolder> certificateHolderSet =
+                    new HashSet<>(certificatesStore.getMatches(null));
+            COSDictionary sigDict = vriDict.getCOSDictionary(COSName.getPDFName(hexSignatureHash));
+            COSArray sigCertArray = sigDict.getCOSArray(COSName.getPDFName("Cert"));
+            Set<X509CertificateHolder> sigCertHolderSetFromVRIArray = new HashSet<>();
+            for (int i = 0; i < sigCertArray.size(); ++i)
+            {
+                COSStream certStream = (COSStream) sigCertArray.getObject(i);
+                try (COSInputStream is = certStream.createInputStream())
+                {
+                    sigCertHolderSetFromVRIArray.add(new X509CertificateHolder(IOUtils.toByteArray(is)));
+                }
+            }
+            for (X509CertificateHolder holder : certificateHolderSet)
+            {
+                if (holder.getSubject().toString().contains("QuoVadis OCSP Authority Signature"))
+                {
+                    continue; // not relevant here
+                }
+                assertTrue(sigCertHolderSetFromVRIArray.contains(holder),
+                        "VRI/signaturehash/Cert array doesn't contain " + holder.getSubject());
+            }
+            // Get all certificates. Each one should either be issued (= signed) by a certificate of the set
+            Set<X509Certificate> certSet = new HashSet<>();
+            for (int i = 0; i < dssCertArray.size(); ++i)
+            {
+                COSStream certStream = (COSStream) dssCertArray.getObject(i);
+                try (COSInputStream is = certStream.createInputStream())
+                {
+                    X509Certificate cert = (X509Certificate) certificateFactory.generateCertificate(is);
+                    certSet.add(cert);
+                }                
+            }
+            for (X509Certificate cert : certSet)
+            {
+                boolean verified = false;
+                for (X509Certificate cert2 : certSet)
+                {
+                    try
+                    {
+                        cert.verify(cert2.getPublicKey(), SecurityProvider.getProvider());
+                        verified = true;
+                    }
+                    catch (GeneralSecurityException ex)
+                    {
+                        // not the issuer
+                    }
+                }
+                assertTrue(verified,
+                    "Certificate " + cert.getSubjectX500Principal() + " not issued by any certificate in the Certs array");
+            }
+            // Each CRL should be signed by one of the certificates in Certs
+            Set<X509CRL> crlSet = new HashSet<>();
+            COSArray crlArray = dssDict.getCOSArray(COSName.getPDFName("CRLs"));
+            for (int i = 0; i < crlArray.size(); ++i)
+            {
+                COSStream crlStream = (COSStream) crlArray.getObject(i);
+                try (COSInputStream is = crlStream.createInputStream())
+                {
+                    X509CRL cert = (X509CRL) certificateFactory.generateCRL(is);
+                    crlSet.add(cert);
+                }                
+            }
+            for (X509CRL crl : crlSet)
+            {
+                boolean crlVerified = false;
+                X509Certificate crlIssuerCert = null;
+                for (X509Certificate cert : certSet)
+                {
+                    try
+                    {
+                        crl.verify(cert.getPublicKey(), SecurityProvider.getProvider());
+                        crlVerified = true;
+                        crlIssuerCert = cert;
+                    }
+                    catch (GeneralSecurityException ex)
+                    {
+                        // not the issuer
+                    }
+                }
+                assertTrue(crlVerified, "issuer of CRL not found in Certs array");
+                
+                byte[] crlSignatureHash = MessageDigest.getInstance("SHA-1").digest(crl.getSignature());
+                String hexCrlSignatureHash = Hex.getString(crlSignatureHash);
+                System.out.println("hexCrlSignatureHash: " + hexCrlSignatureHash);
+                
+                // Check that the issueing certificate is in the VRI array
+                COSDictionary crlSigDict = vriDict.getCOSDictionary(COSName.getPDFName(hexCrlSignatureHash));
+                COSArray certArray2 = crlSigDict.getCOSArray(COSName.getPDFName("Cert"));
+                COSStream certStream = (COSStream) certArray2.getObject(0);
+                X509CertificateHolder certHolder2;
+                try (COSInputStream is2 = certStream.createInputStream())
+                {
+                    certHolder2 = new X509CertificateHolder(IOUtils.toByteArray(is2));
+                }
+                
+                assertEquals(certHolder2, new X509CertificateHolder(crlIssuerCert.getEncoded()),
+                        "CRL issuer certificate missing in VRI " + hexCrlSignatureHash);
+            }   Set<OCSPResp> oscpSet = new HashSet<>();
+            COSArray ocspArray = dssDict.getCOSArray(COSName.getPDFName("OCSPs"));
+            for (int i = 0; i < ocspArray.size(); ++i)
+            {
+                COSStream ocspStream = (COSStream) ocspArray.getObject(i);
+                try (COSInputStream is = ocspStream.createInputStream())
+                {
+                    OCSPResp ocspResp = new OCSPResp(is);
+                    oscpSet.add(ocspResp);
+                }
+            }
+            for (OCSPResp ocspResp : oscpSet)
+            {
+                BasicOCSPResp basicResponse = (BasicOCSPResp) ocspResp.getResponseObject();
+                assertEquals(OCSPResponseStatus.SUCCESSFUL, ocspResp.getStatus());
+                assertTrue(basicResponse.getCerts().length >= 1, "OCSP should have at least 1 certificate");
+                byte[] ocspSignatureHash = MessageDigest.getInstance("SHA-1").digest(basicResponse.getSignature());
+                String hexOcspSignatureHash = Hex.getString(ocspSignatureHash);
+                System.out.println("ocspSignatureHash: " + hexOcspSignatureHash);
+                long secondsOld = (System.currentTimeMillis() - basicResponse.getProducedAt().getTime()) / 1000;
+                assertTrue(secondsOld < 10, "OCSP answer is too old, is from " + secondsOld + " seconds ago");
+                
+                X509CertificateHolder ocspCertHolder = basicResponse.getCerts()[0];
+                ContentVerifierProvider verifier = new JcaContentVerifierProviderBuilder().setProvider(SecurityProvider.getProvider()).build(ocspCertHolder);
+                assertTrue(basicResponse.isSignatureValid(verifier));
+
+                COSDictionary ocspSigDict = vriDict.getCOSDictionary(COSName.getPDFName(hexOcspSignatureHash));
+
+                // Check that the Cert is in the VRI array
+                COSArray certArray2 = ocspSigDict.getCOSArray(COSName.getPDFName("Cert"));
+                COSStream certStream = (COSStream) certArray2.getObject(0);
+                X509CertificateHolder certHolder2;
+                try (COSInputStream is2 = certStream.createInputStream())
+                {
+                    certHolder2 = new X509CertificateHolder(IOUtils.toByteArray(is2));
+                }
+
+                assertEquals(certHolder2, ocspCertHolder, "OCSP certificate is not in the VRI array");
+            }
+        }
+    }
+
+    private byte[] signEncrypted(SecureRandom secureRandom, Date signingTime) throws Exception
+    {
+        KeyStore keystore = KeyStore.getInstance("PKCS12");
+        keystore.load(new FileInputStream(KEYSTORE_PATH), PASSWORD.toCharArray());
+
+        CreateSignature signing = new CreateSignature(keystore, PASSWORD.toCharArray());
+        signing.setExternalSigning(true);
+
+        File inFile = new File(IN_DIR + "sign_me_protected.pdf");
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+
+        PDDocument doc = null;
+        try
+        {
+            doc = Loader.loadPDF(inFile, " ");
+
+            if (secureRandom != null)
+            {
+                doc.getEncryption().getSecurityHandler().setCustomSecureRandom(secureRandom);
+            }
+
+            PDSignature signature = new PDSignature();
+            signature.setName("Example User");
+            Calendar cal = Calendar.getInstance();
+            cal.setTime(signingTime);
+            signature.setSignDate(cal);
+
+            doc.addSignature(signature);
+            doc.setDocumentId(12345l);
+            ExternalSigningSupport externalSigning = doc.saveIncrementalForExternalSigning(baos);
+            // invoke external signature service
+            return IOUtils.toByteArray(externalSigning.getContent());
+        }
+        finally
+        {
+            IOUtils.closeQuietly(doc);
+            IOUtils.closeQuietly(baos);
+        }
+    }
 }
