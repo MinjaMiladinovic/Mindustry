@@ -494,5 +494,5 @@ public final class ServerMetrics {
     public MetricsProvider getMetricsProvider() {
         return metricsProvider;
     }
-
+void f(int a, int b, int c, int d, int e, int f, int i) {}
 }
